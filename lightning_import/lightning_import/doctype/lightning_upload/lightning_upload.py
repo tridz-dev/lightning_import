@@ -85,3 +85,24 @@ def start_import(docname):
 			"status": "error",
 			"message": str(e)
 		}
+
+
+		# total = 100  # total steps
+		# for i in range(total):
+		# 	# Do your processing here
+		# 	frappe.publish_realtime(
+		# 		event='import_progress',
+		# 		message={
+		# 			'progress': int((i + 1) / total * 100),
+		# 			'title': f"Processing {i+1} of {total}"
+		# 		},
+		# 		user=frappe.session.user
+		# 	)
+		# 	frappe.sleep(0.1)  # Simulate work
+
+		# # Final message (optional)
+		# frappe.publish_realtime(
+		# 	event='import_progress',
+		# 	message={'progress': 100, 'title': "Completed!"},
+		# 	user=frappe.session.user
+		# )

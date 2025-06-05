@@ -31,4 +31,10 @@ frappe.ui.form.on('Lightning Upload', {
         }
     }
 });
-  
+
+frappe.realtime.on('import_progress', function (data) {
+    if (data.progress && data.title) {
+        // Show or update progress bar
+        frappe.show_progress(data.title, data.progress, 100, true);
+    }
+});
