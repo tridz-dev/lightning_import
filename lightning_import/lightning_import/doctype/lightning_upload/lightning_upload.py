@@ -59,6 +59,23 @@ class LightningUpload(Document):
 			frappe.throw(_("Error reading CSV file: {}".format(str(e))))
 			return
 
+def get_doctype_fields(doctype):
+	"""Get all field names from a DocType"""
+	fields = frappe.get_meta(doctype).fields
+	return [field.fieldname for field in fields if field.fieldtype not in ['Section Break', 'Column Break', 'Tab Break', 'Fold']]
+
+def get_csv_headers(file_path):
+	"""Get headers from CSV file"""
+	try:
+		with open(file_path, 'r', encoding='utf-8') as csvfile:
+			reader = csv.reader(csvfile)
+			headers = next(reader, None)
+			if not headers:
+				frappe.throw("CSV file is empty")
+			return [header.strip() for header in headers]
+	except Exception as e:
+		frappe.throw(f"Error reading CSV headers: {str(e)}")
+
 @frappe.whitelist()
 def start_import(docname):
 	"""API endpoint to start the import process"""
@@ -69,14 +86,46 @@ def start_import(docname):
 		if doc.status != "Draft":
 			frappe.throw(_("Import can only be started from Draft status"))
 		
+		# Get file path
+		file_doc = frappe.get_doc("File", {"file_url": doc.csv_file})
+		file_path = file_doc.get_full_path()
+		
+		# Get CSV headers
+		csv_headers = get_csv_headers(file_path)
+		
+		# Get DocType fields
+		doctype_fields = get_doctype_fields(doc.import_doctype)
+		
+		# Find matching and non-matching fields
+		matching_fields = []
+		non_matching_fields = []
+		
+		for header in csv_headers:
+			if header in doctype_fields:
+				matching_fields.append(header)
+			else:
+				non_matching_fields.append(header)
+		
+		# If no matching fields found, throw error
+		if not matching_fields:
+			frappe.throw(_("No matching fields found between CSV headers and {0} DocType fields").format(doc.import_doctype))
+		
+		# If there are non-matching fields, throw error with details
+		if non_matching_fields:
+			error_msg = _("CSV headers do not match DocType fields. Please fix the following headers:\n\n")
+			error_msg += _("Non-matching headers: {0}\n\n").format(", ".join(non_matching_fields))
+			error_msg += _("Available DocType fields: {0}").format(", ".join(doctype_fields))
+			frappe.throw(error_msg)
+		
 		# Update status to In Progress
 		doc.status = "In Progress"
 		doc.save()
 		
-		# Return success message
+		# Return success message with matching fields info
 		return {
 			"status": "success",
-			"message": _("Import process started successfully")
+			"message": _("Import process started successfully"),
+			"matching_fields": matching_fields
 		}
 		
 	except Exception as e:
