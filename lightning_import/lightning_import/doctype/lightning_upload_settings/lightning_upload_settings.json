@@ -10,8 +10,11 @@
  "fields": [
   {
    "fieldname": "batch_size",
-   "fieldtype": "Data",
-   "label": "Batch Size"
+   "fieldtype": "Int",
+   "label": "Batch Size",
+   "default": 1000,
+   "description": "Number of records to process in each batch during import",
+   "reqd": 1
   }
  ],
  "grid_page_length": 50,

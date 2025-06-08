@@ -118,6 +118,28 @@ frappe.ui.form.on('Lightning Upload', {
                 }
             });
         };
+
+        if (frm.doc.status === 'Failed' || frm.doc.status === 'Partial Success') {
+            frm.add_custom_button(__('Export Error Rows'), function() {
+                frappe.call({
+                    method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.export_error_rows',
+                    args: {
+                        docname: frm.doc.name
+                    },
+                    callback: function(r) {
+                        if (r.message && r.message.status === 'success') {
+                            window.open(r.message.file_url, '_blank');
+                        } else {
+                            frappe.msgprint({
+                                title: __('Error'),
+                                message: r.message.message || __('Error exporting failed rows'),
+                                indicator: 'red'
+                            });
+                        }
+                    }
+                });
+            });
+        }
     }
 });
 
