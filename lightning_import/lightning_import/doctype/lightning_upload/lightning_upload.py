@@ -459,6 +459,30 @@ def start_import(docname):
 		# Additional validation for update type
 		if doc.import_type == "Update Existing Records" and "name" not in csv_headers:
 			frappe.throw(_("Column 'name' is required for updating existing records"))
+
+		# Initialize progress in cache before enqueueing
+		progress_key = f"lightning_import_{docname}"
+		initial_progress = {
+			"status": "Queued",
+			"progress": 0,
+			"title": "Import queued...",
+			"progress_key": progress_key,
+			"successful_records": 0,
+			"failed_records": 0
+		}
+		frappe.cache().set_value(progress_key, initial_progress)
+		
+		# Update document status
+		doc.db_set('status', 'Queued', update_modified=False)
+		frappe.db.commit()
+		
+		# Publish initial progress
+		frappe.publish_realtime(
+			event='import_progress',
+			message=initial_progress,
+			user=frappe.session.user,
+			after_commit=True
+		)
 		
 		# Enqueue the import process
 		frappe.enqueue(
@@ -471,11 +495,19 @@ def start_import(docname):
 		return {
 			"status": "success",
 			"message": _("Import process started successfully"),
-			"matching_fields": matching_fields
+			"matching_fields": matching_fields,
+			"progress_key": progress_key  # Send progress key to client
 		}
 		
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Error")
+		# If there's an error, try to set status back to Draft
+		try:
+			doc = frappe.get_doc("Lightning Upload", docname)
+			doc.db_set('status', 'Draft', update_modified=False)
+			frappe.db.commit()
+		except:
+			pass
 		return {
 			"status": "error",
 			"message": str(e)

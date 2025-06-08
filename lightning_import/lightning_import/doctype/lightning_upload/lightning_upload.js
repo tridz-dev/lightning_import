@@ -53,10 +53,10 @@ frappe.realtime.on('import_progress', function(data) {
     const frm = frappe.get_form('Lightning Upload');
     if (!frm || !data) return;
 
-    const progress_key = `lightning_import_${frm.doc.name}`;
-    if (data.progress_key !== progress_key) return;
-
-    update_progress(frm, data);
+    // Only process if this is for our document
+    if (data.progress_key && data.progress_key === frm.progress_key) {
+        update_progress(frm, data);
+    }
 });
 
 function setup_progress_tracking(frm) {
@@ -77,12 +77,10 @@ function setup_progress_tracking(frm) {
         </div>
     `).insertAfter(frm.page.main);
 
-    // Set up polling for progress updates
-    const progress_key = `lightning_import_${frm.doc.name}`;
-    frm.progress_key = progress_key;
-    
-    // Start polling
-    poll_progress(frm);
+    // Start polling if we have a progress key
+    if (frm.progress_key) {
+        poll_progress(frm);
+    }
 }
 
 function poll_progress(frm) {
@@ -193,8 +191,12 @@ function start_import(frm) {
                     message: r.message.message,
                     indicator: 'green'
                 });
-                // Set up progress tracking immediately
-                setup_progress_tracking(frm);
+                
+                // Store progress key and start polling
+                if (r.message.progress_key) {
+                    frm.progress_key = r.message.progress_key;
+                    setup_progress_tracking(frm);
+                }
             } else {
                 // Hide progress bar on error
                 if (frm.progress_bar) {
