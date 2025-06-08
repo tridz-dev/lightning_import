@@ -472,9 +472,8 @@ def start_import(docname):
 		}
 		frappe.cache().set_value(progress_key, initial_progress)
 		
-		# Update document status using set_value
+		# Update document status to Queued
 		frappe.db.set_value("Lightning Upload", docname, "status", "Queued", update_modified=False)
-		frappe.db.commit()
 		
 		# Publish initial progress
 		frappe.publish_realtime(

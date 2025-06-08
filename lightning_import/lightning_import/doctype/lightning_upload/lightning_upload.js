@@ -101,23 +101,23 @@ function update_progress(frm, data) {
         .attr('aria-valuenow', data.progress);
     frm.progress_bar.find('.progress-status').html(data.title);
 
-    // Update status in form
+    // Update status in form without marking as dirty
     if (data.status) {
-        frm.set_value('status', data.status);
+        frm.doc.status = data.status;
         frm.refresh_field('status');
     }
 
     // Update other fields if available
     if (data.successful_records !== undefined) {
-        frm.set_value('successful_records', data.successful_records);
+        frm.doc.successful_records = data.successful_records;
         frm.refresh_field('successful_records');
     }
     if (data.failed_records !== undefined) {
-        frm.set_value('failed_records', data.failed_records);
+        frm.doc.failed_records = data.failed_records;
         frm.refresh_field('failed_records');
     }
     if (data.import_time) {
-        frm.set_value('import_time', data.import_time);
+        frm.doc.import_time = data.import_time;
         frm.refresh_field('import_time');
     }
 
