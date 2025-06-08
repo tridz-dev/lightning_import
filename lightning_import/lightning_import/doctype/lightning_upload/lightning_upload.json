@@ -11,7 +11,13 @@
   "import_type",
   "csv_file",
   "total_data",
-  "export_errored_rows"
+  "export_errored_rows",
+  "error_file",
+  "total_records",
+  "successful_records",
+  "failed_records",
+  "last_processed_row",
+  "error_log"
  ],
  "fields": [
   {
@@ -59,12 +65,48 @@
    "fieldname": "export_errored_rows",
    "fieldtype": "Button",
    "label": "Export Errored Rows"
+  },
+  {
+   "fieldname": "error_file",
+   "fieldtype": "Attach",
+   "label": "Error File",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_records",
+   "fieldtype": "Data",
+   "label": "Total Records",
+   "read_only": 1
+  },
+  {
+   "fieldname": "successful_records",
+   "fieldtype": "Data",
+   "label": "Successful Records",
+   "read_only": 1
+  },
+  {
+   "fieldname": "failed_records",
+   "fieldtype": "Data",
+   "label": "Failed Records",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_processed_row",
+   "fieldtype": "Data",
+   "label": "Last Processed Row",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error_log",
+   "fieldtype": "Long Text",
+   "label": "Error Log",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-06-05 12:33:23.305012",
+ "modified": "2025-06-08 23:52:02.386214",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",
