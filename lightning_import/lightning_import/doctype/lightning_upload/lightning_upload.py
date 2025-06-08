@@ -247,7 +247,7 @@ class LightningUpload(Document):
 		"""Process the CSV import in background"""
 		try:
 			# Set status to queued before enqueueing
-			self.db_set('status', 'Queued', update_modified=False)
+			frappe.db.set_value("Lightning Upload", self.name, "status", "Queued", update_modified=False)
 			frappe.db.commit()  # Commit to ensure status is updated
 
 			# Enqueue the import job
@@ -265,7 +265,7 @@ class LightningUpload(Document):
 			}
 		except Exception as e:
 			# If queueing fails, set status back to Draft
-			self.db_set('status', 'Draft', update_modified=False)
+			frappe.db.set_value("Lightning Upload", self.name, "status", "Draft", update_modified=False)
 			frappe.db.commit()
 			frappe.log_error(f"Failed to queue import job: {str(e)}", "Lightning Upload Queue Error")
 			return {
@@ -472,8 +472,8 @@ def start_import(docname):
 		}
 		frappe.cache().set_value(progress_key, initial_progress)
 		
-		# Update document status
-		doc.db_set('status', 'Queued', update_modified=False)
+		# Update document status using set_value
+		frappe.db.set_value("Lightning Upload", docname, "status", "Queued", update_modified=False)
 		frappe.db.commit()
 		
 		# Publish initial progress
@@ -503,8 +503,7 @@ def start_import(docname):
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Error")
 		# If there's an error, try to set status back to Draft
 		try:
-			doc = frappe.get_doc("Lightning Upload", docname)
-			doc.db_set('status', 'Draft', update_modified=False)
+			frappe.db.set_value("Lightning Upload", docname, "status", "Draft", update_modified=False)
 			frappe.db.commit()
 		except:
 			pass

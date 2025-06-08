@@ -12,11 +12,25 @@ frappe.progress_state = {
     is_importing: false,
     progress_bar: null,
     current_progress: 0,
-    current_title: ''
+    current_title: '',
+    current_form: null
 };
+
+// Debug socket connection
+frappe.realtime.on('socket_connected', () => {
+    console.log('[Lightning Import] Socket connected');
+});
+
+frappe.realtime.on('socket_disconnected', () => {
+    console.log('[Lightning Import] Socket disconnected');
+});
 
 frappe.ui.form.on('Lightning Upload', {
     refresh: function(frm) {
+        console.log('[Lightning Import] Form refreshed, status:', frm.doc.status);
+        // Store reference to current form
+        frappe.progress_state.current_form = frm;
+        
         // Show Start Import button only when status is Draft and document is saved
         if (!frm.is_new() && frm.doc.status === "Draft") {
             frm.page.set_primary_action(__('Start Import'), () => {
@@ -41,6 +55,10 @@ frappe.ui.form.on('Lightning Upload', {
     },
 
     onload: function(frm) {
+        console.log('[Lightning Import] Form loaded, status:', frm.doc.status);
+        // Store reference to current form
+        frappe.progress_state.current_form = frm;
+        
         // Set up progress tracking when form loads if import is in progress
         if (frm.doc.status === 'Queued' || frm.doc.status === 'In Progress') {
             setup_progress_tracking(frm);
@@ -50,16 +68,35 @@ frappe.ui.form.on('Lightning Upload', {
 
 // Global event handler for import progress
 frappe.realtime.on('import_progress', function(data) {
-    const frm = frappe.get_form('Lightning Upload');
-    if (!frm || !data) return;
-
-    // Only process if this is for our document
-    if (data.progress_key && data.progress_key === frm.progress_key) {
-        update_progress(frm, data);
+    console.log('[Lightning Import] Received real-time event:', data);
+    
+    const frm = frappe.progress_state.current_form;
+    if (!frm) {
+        console.log('[Lightning Import] No active form found');
+        return;
     }
+
+    // If we have a progress key in the event, verify it matches
+    if (data.progress_key) {
+        const formProgressKey = `lightning_import_${frm.doc.name}`;
+        if (data.progress_key !== formProgressKey) {
+            console.log('[Lightning Import] Progress key mismatch:', {
+                received: data.progress_key,
+                expected: formProgressKey
+            });
+            return;
+        }
+    }
+
+    // Process the update if we have an active form and either:
+    // 1. The progress key matches, or
+    // 2. There's no progress key (legacy format)
+    console.log('[Lightning Import] Processing real-time update for document:', frm.doc.name);
+    update_progress(frm, data);
 });
 
 function setup_progress_tracking(frm) {
+    console.log('[Lightning Import] Setting up progress tracking for document:', frm.doc.name);
     // Clear any existing progress bar
     if (frm.progress_bar) {
         frm.progress_bar.remove();
@@ -76,34 +113,14 @@ function setup_progress_tracking(frm) {
             <div class="progress-status text-muted"></div>
         </div>
     `).insertAfter(frm.page.main);
-
-    // Start polling if we have a progress key
-    if (frm.progress_key) {
-        poll_progress(frm);
-    }
-}
-
-function poll_progress(frm) {
-    if (!frm.progress_key) return;
-
-    frappe.call({
-        method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_import_progress',
-        args: { progress_key: frm.progress_key },
-        callback: function(r) {
-            if (r.message) {
-                update_progress(frm, r.message);
-                
-                // Continue polling if still in progress
-                if (r.message.status === 'In Progress' || r.message.status === 'Queued') {
-                    setTimeout(() => poll_progress(frm), 1000);
-                }
-            }
-        }
-    });
 }
 
 function update_progress(frm, data) {
-    if (!data || !frm.progress_bar) return;
+    console.log('[Lightning Import] Updating progress:', data);
+    if (!data || !frm.progress_bar) {
+        console.log('[Lightning Import] No data or progress bar available for update');
+        return;
+    }
     
     // Update progress bar
     frm.progress_bar.find('.progress-bar')
@@ -113,6 +130,7 @@ function update_progress(frm, data) {
 
     // Update status in form
     if (data.status) {
+        console.log('[Lightning Import] Updating status to:', data.status);
         frm.set_value('status', data.status);
         frm.refresh_field('status');
     }
@@ -133,6 +151,7 @@ function update_progress(frm, data) {
 
     // Handle completion
     if (data.status === 'Completed' || data.status === 'Failed' || data.status === 'Partial Success') {
+        console.log('[Lightning Import] Import completed with status:', data.status);
         let message = '';
         if (data.status === 'Completed') {
             message = __(`Successfully imported ${data.successful_records} records`);
@@ -166,6 +185,7 @@ function update_progress(frm, data) {
 }
 
 function start_import(frm) {
+    console.log('[Lightning Import] Starting import for document:', frm.doc.name);
     // Add progress bar before starting import
     if (!frm.progress_bar) {
         frm.progress_bar = $(`
@@ -186,17 +206,12 @@ function start_import(frm) {
             docname: frm.doc.name
         },
         callback: function(r) {
+            console.log('[Lightning Import] Start import response:', r.message);
             if (r.message && r.message.status === 'success') {
                 frappe.show_alert({
                     message: r.message.message,
                     indicator: 'green'
                 });
-                
-                // Store progress key and start polling
-                if (r.message.progress_key) {
-                    frm.progress_key = r.message.progress_key;
-                    setup_progress_tracking(frm);
-                }
             } else {
                 // Hide progress bar on error
                 if (frm.progress_bar) {
