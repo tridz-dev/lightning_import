@@ -120,13 +120,71 @@ def start_import(docname):
 		# Update status to In Progress
 		doc.status = "In Progress"
 		doc.save()
-		
-		# Return success message with matching fields info
-		return {
-			"status": "success",
-			"message": _("Import process started successfully"),
-			"matching_fields": matching_fields
-		}
+
+		# Create a progress key for this import
+		progress_key = f"lightning_import_{docname}"
+		frappe.cache().set_value(progress_key, {
+			"status": "In Progress",
+			"progress": 0,
+			"title": "Starting import..."
+		})
+
+		def update_progress(phase, current_step, total_phase_steps):
+			progress = int((current_step / total_phase_steps) * 100)
+			message = {
+				"status": "In Progress",
+				"progress": progress,
+				"title": f"{phase}... ({progress}%)"
+			}
+			frappe.cache().set_value(progress_key, message)
+			frappe.publish_realtime(
+				event='import_progress',
+				message=message,
+				user=frappe.session.user,
+				after_commit=True
+			)
+			frappe.db.commit()
+			frappe.sleep(0.1)
+
+		try:
+			# Simulate validation phase (20%)
+			for i in range(20):
+				update_progress("Validating data", i + 1, 20)
+
+			# Simulate processing phase (60%)
+			for i in range(60):
+				update_progress("Processing records", i + 1, 60)
+
+			# Simulate final phase (20%)
+			for i in range(20):
+				update_progress("Finalizing import", i + 1, 20)
+
+			# Final completion message
+			completion_message = {
+				"status": "Complete",
+				"progress": 100,
+				"title": "Import completed successfully!"
+			}
+			frappe.cache().set_value(progress_key, completion_message)
+			frappe.publish_realtime(
+				event='import_progress',
+				message=completion_message,
+				user=frappe.session.user,
+				after_commit=True
+			)
+			frappe.db.commit()
+
+			# Return success message with matching fields info
+			return {
+				"status": "success",
+				"message": _("Import process started successfully"),
+				"matching_fields": matching_fields,
+				"progress_key": progress_key
+			}
+
+		finally:
+			# Clean up progress key after 1 hour
+			frappe.cache().expire(progress_key, 3600)
 		
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Error")
@@ -135,23 +193,12 @@ def start_import(docname):
 			"message": str(e)
 		}
 
-
-		# total = 100  # total steps
-		# for i in range(total):
-		# 	# Do your processing here
-		# 	frappe.publish_realtime(
-		# 		event='import_progress',
-		# 		message={
-		# 			'progress': int((i + 1) / total * 100),
-		# 			'title': f"Processing {i+1} of {total}"
-		# 		},
-		# 		user=frappe.session.user
-		# 	)
-		# 	frappe.sleep(0.1)  # Simulate work
-
-		# # Final message (optional)
-		# frappe.publish_realtime(
-		# 	event='import_progress',
-		# 	message={'progress': 100, 'title': "Completed!"},
-		# 	user=frappe.session.user
-		# )
+@frappe.whitelist()
+def get_import_progress(progress_key):
+	"""Get the current progress of an import"""
+	try:
+		progress = frappe.cache().get_value(progress_key)
+		return progress or {"status": "Not Found", "progress": 0, "title": "Import not found"}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Progress Error")
+		return {"status": "Error", "progress": 0, "title": str(e)}
