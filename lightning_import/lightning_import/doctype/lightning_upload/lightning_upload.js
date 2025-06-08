@@ -108,6 +108,21 @@ frappe.ui.form.on('Lightning Upload', {
                                 setTimeout(() => {
                                     frm.progress_bar.hide();
                                     frm.reload_doc();
+                                    
+                                    // Show success alert with details
+                                    if (progress.successful_records > 0) {
+                                        let message = __(`Successfully imported ${progress.successful_records} records`);
+                                        if (progress.failed_records > 0) {
+                                            message += __(`, ${progress.failed_records} records failed`);
+                                        }
+                                        message += __(`, time taken: ${progress.time_taken}`);
+                                        
+                                        frappe.show_alert({
+                                            message: message,
+                                            indicator: 'green',
+                                            timeout: 10
+                                        });
+                                    }
                                 }, 2000);
                             } else if (progress.status === "In Progress") {
                                 // Continue polling
@@ -155,6 +170,21 @@ frappe.realtime.on('import_progress', function (data) {
             setTimeout(() => {
                 frm.progress_bar.hide();
                 frm.reload_doc();
+                
+                // Show success alert with details
+                if (data.successful_records > 0) {
+                    let message = __(`Successfully imported ${data.successful_records} records`);
+                    if (data.failed_records > 0) {
+                        message += __(`, ${data.failed_records} records failed`);
+                    }
+                    message += __(`, time taken: ${data.time_taken}`);
+                    
+                    frappe.show_alert({
+                        message: message,
+                        indicator: 'green',
+                        timeout: 10
+                    });
+                }
             }, 2000);
         }
     }

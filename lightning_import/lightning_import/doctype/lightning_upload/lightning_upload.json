@@ -17,6 +17,7 @@
   "successful_records",
   "failed_records",
   "last_processed_row",
+  "import_time",
   "error_log"
  ],
  "fields": [
@@ -94,6 +95,12 @@
    "fieldname": "last_processed_row",
    "fieldtype": "Data",
    "label": "Last Processed Row",
+   "read_only": 1
+  },
+  {
+   "fieldname": "import_time",
+   "fieldtype": "Data",
+   "label": "Import Time",
    "read_only": 1
   },
   {

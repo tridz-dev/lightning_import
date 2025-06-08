@@ -12,6 +12,7 @@ from frappe.utils import cstr
 from lightning_import.lightning_import.doctype.lightning_upload_settings.lightning_upload_settings import LightningUploadSettings
 import tempfile
 from frappe.utils.file_manager import save_file
+import time
 
 class LightningUpload(Document):
 	def validate(self):
@@ -259,6 +260,8 @@ def get_csv_headers(file_path):
 @frappe.whitelist()
 def process_import_queue(docname):
 	"""Process the import in batches"""
+	start_time = time.time()
+	
 	try:
 		# Get fresh copy of doc each time
 		doc = frappe.get_doc("Lightning Upload", docname)
@@ -309,10 +312,15 @@ def process_import_queue(docname):
 				after_commit=True
 			)
 		
+		# Calculate time taken
+		time_taken = time.time() - start_time
+		time_str = f"{int(time_taken)}s" if time_taken < 60 else f"{time_taken/60:.1f}m"
+		
 		# Update final status and counts
 		updates = {
 			"successful_records": successful_records,
-			"failed_records": failed_records
+			"failed_records": failed_records,
+			"import_time": time_str  # Store time taken
 		}
 		
 		if failed_records == total_rows:
@@ -334,13 +342,17 @@ def process_import_queue(docname):
 		for field, value in updates.items():
 			frappe.db.set_value("Lightning Upload", docname, field, value)
 		
-		# Final progress update
+		# Final progress update with time taken
 		progress_key = f"lightning_import_{docname}"
 		final_status = updates.get("status", "Completed")
 		frappe.cache().set_value(progress_key, {
 			"status": final_status,
 			"progress": 100,
-			"title": f"Import {final_status.lower()}"
+			"title": f"Import {final_status.lower()}",
+			"time_taken": time_str,
+			"total_records": total_rows,
+			"successful_records": successful_records,
+			"failed_records": failed_records
 		})
 		frappe.publish_realtime(
 			event='import_progress',
@@ -351,7 +363,11 @@ def process_import_queue(docname):
 		
 		return {
 			"status": "success",
-			"message": f"Import {final_status.lower()}. Successful: {successful_records}, Failed: {failed_records}"
+			"message": f"Import {final_status.lower()}. Successful: {successful_records}, Failed: {failed_records}, Time taken: {time_str}",
+			"time_taken": time_str,
+			"total_records": total_rows,
+			"successful_records": successful_records,
+			"failed_records": failed_records
 		}
 		
 	except Exception as e:
