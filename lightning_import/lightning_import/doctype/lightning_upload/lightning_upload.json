@@ -11,7 +11,6 @@
   "import_type",
   "csv_file",
   "total_data",
-  "export_errored_rows",
   "error_file",
   "total_records",
   "successful_records",
@@ -27,7 +26,7 @@
    "hidden": 1,
    "in_list_view": 1,
    "label": "Status",
-   "options": "Draft\nIn Progress\nCompleted\nFailed\nPartial Success",
+   "options": "Draft\nQueued\nIn Progress\nCompleted\nFailed\nPartial Success",
    "read_only": 1
   },
   {
@@ -60,12 +59,6 @@
    "fieldtype": "Data",
    "label": "Total Data",
    "read_only": 1
-  },
-  {
-   "depends_on": "eval:doc.status in ['Failed', 'Partial Success']",
-   "fieldname": "export_errored_rows",
-   "fieldtype": "Button",
-   "label": "Export Errored Rows"
   },
   {
    "fieldname": "error_file",
@@ -113,7 +106,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-06-08 23:52:02.386214",
+ "modified": "2025-06-09 00:17:55.021342",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",

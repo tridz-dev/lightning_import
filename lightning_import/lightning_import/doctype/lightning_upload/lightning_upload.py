@@ -13,6 +13,7 @@ from lightning_import.lightning_import.doctype.lightning_upload_settings.lightni
 import tempfile
 from frappe.utils.file_manager import save_file
 import time
+import random
 
 class LightningUpload(Document):
 	def validate(self):
@@ -77,11 +78,13 @@ class LightningUpload(Document):
 
 	def generate_docname(self, row_data):
 		"""Generate a unique docname based on row data"""
-		# Create a string of all values
-		values_str = ''.join(str(v) for v in row_data.values())
-		# Generate hash
-		hash_object = hashlib.md5(values_str.encode())
-		return f"{self.import_doctype}-{hash_object.hexdigest()[:10]}"
+		# Get current timestamp in microseconds
+		timestamp = int(time.time() * 1000000)
+		# Generate a random 6-digit number
+		random_suffix = random.randint(100000, 999999)
+		# Combine timestamp and random number for absolute uniqueness
+		unique_id = f"{timestamp}{random_suffix}"
+		return f"{self.import_doctype}-{unique_id}"
 
 	def insert_records(self, rows):
 		"""Insert records in bulk using SQL"""
@@ -239,6 +242,36 @@ class LightningUpload(Document):
 			# Clean up the temporary file
 			if os.path.exists(path):
 				os.unlink(path)
+
+	def process_import(self):
+		"""Process the CSV import in background"""
+		try:
+			# Set status to queued before enqueueing
+			self.db_set('status', 'Queued', update_modified=False)
+			frappe.db.commit()  # Commit to ensure status is updated
+
+			# Enqueue the import job
+			frappe.enqueue(
+				'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.process_import_queue',
+				queue='long',
+				timeout=6000,
+				now=False,
+				doc=self.as_dict()
+			)
+			
+			return {
+				'status': 'success',
+				'message': 'Import has been queued for processing'
+			}
+		except Exception as e:
+			# If queueing fails, set status back to Draft
+			self.db_set('status', 'Draft', update_modified=False)
+			frappe.db.commit()
+			frappe.log_error(f"Failed to queue import job: {str(e)}", "Lightning Upload Queue Error")
+			return {
+				'status': 'error',
+				'message': f'Failed to queue import job: {str(e)}'
+			}
 
 def get_doctype_fields(doctype):
 	"""Get all field names from a DocType"""
