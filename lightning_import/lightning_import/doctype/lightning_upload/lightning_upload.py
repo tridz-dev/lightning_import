@@ -258,7 +258,7 @@ class LightningUpload(Document):
 		# Only call custom validation hooks if validate_from_hook is enabled in settings
 		if LightningUploadSettings.get_validate_from_hook():
 			for method in frappe.get_hooks('lightning_import_validate_row'):
-				frappe.call(method, data=data, doctype=self.import_doctype)
+				frappe.call(method, data=data, doctype=self.import_doctype, import_type=self.import_type)
 
 def get_doctype_fields(doctype):
 	"""Get all field names from a DocType"""
