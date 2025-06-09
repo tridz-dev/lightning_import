@@ -262,8 +262,12 @@ class LightningUpload(Document):
 
 def get_doctype_fields(doctype):
 	"""Get all field names from a DocType"""
-	fields = frappe.get_meta(doctype).fields
-	return [field.fieldname for field in fields if field.fieldtype not in ['Section Break', 'Column Break', 'Tab Break', 'Fold']]
+	meta = frappe.get_meta(doctype)
+	# Get regular fields
+	fields = [field.fieldname for field in meta.fields if field.fieldtype not in ['Section Break', 'Column Break', 'Tab Break', 'Fold']]
+	# Add system fields
+	system_fields = ['name', 'owner', 'creation', 'modified', 'modified_by']
+	return fields + system_fields
 
 def get_csv_headers(file_path):
 	"""Get headers from CSV file"""

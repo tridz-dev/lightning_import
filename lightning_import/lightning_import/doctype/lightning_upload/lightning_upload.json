@@ -24,9 +24,11 @@
   {
    "fieldname": "status",
    "fieldtype": "Select",
+   "hidden": 1,
    "in_list_view": 1,
    "label": "Status",
-   "options": "Draft\nQueued\nIn Progress\nCompleted\nFailed\nPartial Success"
+   "options": "Draft\nQueued\nIn Progress\nCompleted\nFailed\nPartial Success",
+   "read_only": 1
   },
   {
    "fieldname": "import_doctype",
@@ -112,7 +114,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-06-09 21:45:55.098611",
+ "modified": "2025-06-09 21:51:58.395464",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",
