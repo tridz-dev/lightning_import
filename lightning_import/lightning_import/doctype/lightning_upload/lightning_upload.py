@@ -140,6 +140,16 @@ class LightningUpload(Document):
 				if 'modified' not in converted_data:
 					converted_data['modified'] = frappe.utils.now()
 				
+				# Validate row data here
+				try:
+					self.validate_row_data(converted_data)
+				except Exception as e:
+					failed_rows.append({
+						'row': row,
+						'error': str(e)
+					})
+					continue
+				
 				records.append(converted_data)
 				success_count += 1
 				
@@ -243,35 +253,11 @@ class LightningUpload(Document):
 			if os.path.exists(path):
 				os.unlink(path)
 
-	def process_import(self):
-		"""Process the CSV import in background"""
-		try:
-			# Set status to queued before enqueueing
-			frappe.db.set_value("Lightning Upload", self.name, "status", "Queued", update_modified=False)
-			frappe.db.commit()  # Commit to ensure status is updated
-
-			# Enqueue the import job
-			frappe.enqueue(
-				'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.process_import_queue',
-				queue='long',
-				timeout=6000,
-				now=False,
-				doc=self.as_dict()
-			)
-			
-			return {
-				'status': 'success',
-				'message': 'Import has been queued for processing'
-			}
-		except Exception as e:
-			# If queueing fails, set status back to Draft
-			frappe.db.set_value("Lightning Upload", self.name, "status", "Draft", update_modified=False)
-			frappe.db.commit()
-			frappe.log_error(f"Failed to queue import job: {str(e)}", "Lightning Upload Queue Error")
-			return {
-				'status': 'error',
-				'message': f'Failed to queue import job: {str(e)}'
-			}
+	def validate_row_data(self, data):
+		"""Validate row data before inserting"""
+		# Call custom validation hooks
+		for method in frappe.get_hooks('lightning_import_validate_row'):
+			frappe.call(method, data=data, doctype=self.import_doctype)
 
 def get_doctype_fields(doctype):
 	"""Get all field names from a DocType"""
