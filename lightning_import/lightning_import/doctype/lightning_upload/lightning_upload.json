@@ -17,6 +17,7 @@
   "failed_records",
   "last_processed_row",
   "import_time",
+  "timing_details",
   "error_log"
  ],
  "fields": [
@@ -95,6 +96,13 @@
    "fieldtype": "Data",
    "label": "Import Time",
    "read_only": 1
+  },
+  {
+   "fieldname": "timing_details",
+   "fieldtype": "Long Text",
+   "label": "Timing Details",
+   "read_only": 1,
+   "description": "Detailed timing information for the import process"
   },
   {
    "fieldname": "error_log",

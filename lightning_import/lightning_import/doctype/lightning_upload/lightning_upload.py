@@ -281,6 +281,7 @@ def get_csv_headers(file_path):
 def process_import_queue(docname):
 	"""Process the import in batches"""
 	start_time = time.time()
+	batch_timings = []
 	
 	try:
 		# Get fresh copy of doc each time
@@ -290,8 +291,10 @@ def process_import_queue(docname):
 		frappe.db.set_value("Lightning Upload", docname, "status", "In Progress")
 		frappe.db.commit()
 		
-		# Get CSV data
+		# Get CSV data with timing
+		csv_start = time.time()
 		csv_data = doc.get_csv_data()
+		csv_time = round((time.time() - csv_start) * 1000, 2)
 		total_rows = len(csv_data)
 		
 		# Update total records
@@ -306,7 +309,10 @@ def process_import_queue(docname):
 		all_failed_rows = []
 		
 		for i in range(0, total_rows, batch_size):
+			batch_start = time.time()
 			batch = csv_data[i:i + batch_size]
+			batch_num = (i // batch_size) + 1
+			total_batches = (total_rows + batch_size - 1) // batch_size
 			
 			# Update progress
 			progress = min(100, int((i / total_rows) * 100))
@@ -314,17 +320,40 @@ def process_import_queue(docname):
 			
 			# Get fresh doc for processing
 			doc = frappe.get_doc("Lightning Upload", docname)
+			
+			# Time the record insertion
+			insert_start = time.time()
 			result = doc.insert_records(batch)
+			insert_time = round((time.time() - insert_start) * 1000, 2)
+			
 			successful_records += result['success_count']
 			failed_records += len(result['failed_rows'])
 			all_failed_rows.extend(result['failed_rows'])
 			
-			# Update progress in cache
+			# Calculate batch timing
+			batch_time = round((time.time() - batch_start) * 1000, 2)
+			batch_timings.append({
+				'batch': batch_num,
+				'total_batches': total_batches,
+				'batch_size': len(batch),
+				'total_time_ms': batch_time,
+				'insert_time_ms': insert_time,
+				'successful': result['success_count'],
+				'failed': len(result['failed_rows'])
+			})
+			
+			# Update progress in cache with timing info
 			progress_key = f"lightning_import_{docname}"
 			frappe.cache().set_value(progress_key, {
 				"status": "In Progress",
 				"progress": progress,
-				"title": f"Processing records... ({progress}%)"
+				"title": f"Processing records... ({progress}%)",
+				"batch_info": {
+					"current_batch": batch_num,
+					"total_batches": total_batches,
+					"batch_time_ms": batch_time,
+					"insert_time_ms": insert_time
+				}
 			})
 			frappe.publish_realtime(
 				event='import_progress',
@@ -337,11 +366,30 @@ def process_import_queue(docname):
 		time_taken = time.time() - start_time
 		time_str = f"{int(time_taken)}s" if time_taken < 60 else f"{time_taken/60:.1f}m"
 		
+		# Generate error file with timing if needed
+		error_file_time = 0
+		if all_failed_rows:
+			error_start = time.time()
+			doc = frappe.get_doc("Lightning Upload", docname)
+			doc.error_log = json.dumps(all_failed_rows, indent=2)
+			doc.save()
+			# Generate error file
+			doc.generate_error_file(all_failed_rows)
+			error_file_time = round((time.time() - error_start) * 1000, 2)
+		
 		# Update final status and counts
 		updates = {
 			"successful_records": successful_records,
 			"failed_records": failed_records,
-			"import_time": time_str  # Store time taken
+			"import_time": time_str,  # Store time taken
+			"timing_details": json.dumps({
+				"total_time_seconds": round(time_taken, 2),
+				"csv_load_time_ms": csv_time,
+				"error_file_time_ms": error_file_time,
+				"batch_timings": batch_timings,
+				"average_batch_time_ms": round(sum(b['total_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0,
+				"average_insert_time_ms": round(sum(b['insert_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0
+			}, indent=2)
 		}
 		
 		if failed_records == total_rows:
@@ -351,19 +399,11 @@ def process_import_queue(docname):
 		else:
 			updates["status"] = "Completed"
 		
-		# Store error log if any failures
-		if all_failed_rows:
-			doc = frappe.get_doc("Lightning Upload", docname)
-			doc.error_log = json.dumps(all_failed_rows, indent=2)
-			doc.save()
-			# Generate error file
-			doc.generate_error_file(all_failed_rows)
-		
 		# Update all fields at once
 		for field, value in updates.items():
 			frappe.db.set_value("Lightning Upload", docname, field, value)
 		
-		# Final progress update with time taken
+		# Final progress update with detailed timing
 		progress_key = f"lightning_import_{docname}"
 		final_status = updates.get("status", "Completed")
 		frappe.cache().set_value(progress_key, {
@@ -373,7 +413,13 @@ def process_import_queue(docname):
 			"time_taken": time_str,
 			"total_records": total_rows,
 			"successful_records": successful_records,
-			"failed_records": failed_records
+			"failed_records": failed_records,
+			"timing_details": {
+				"total_time_seconds": round(time_taken, 2),
+				"csv_load_time_ms": csv_time,
+				"error_file_time_ms": error_file_time,
+				"average_batch_time_ms": round(sum(b['total_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0
+			}
 		})
 		frappe.publish_realtime(
 			event='import_progress',
@@ -388,7 +434,8 @@ def process_import_queue(docname):
 			"time_taken": time_str,
 			"total_records": total_rows,
 			"successful_records": successful_records,
-			"failed_records": failed_records
+			"failed_records": failed_records,
+			"timing_details": updates["timing_details"]
 		}
 		
 	except Exception as e:
