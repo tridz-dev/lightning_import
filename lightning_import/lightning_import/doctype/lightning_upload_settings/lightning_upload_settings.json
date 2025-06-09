@@ -5,23 +5,31 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "batch_size"
+  "batch_size",
+  "validate_from_hook"
  ],
  "fields": [
   {
+   "default": "1000",
+   "description": "Number of records to process in each batch during import",
    "fieldname": "batch_size",
    "fieldtype": "Int",
+   "in_list_view": 1,
    "label": "Batch Size",
-   "default": 1000,
-   "description": "Number of records to process in each batch during import",
    "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "validate_from_hook",
+   "fieldtype": "Check",
+   "label": "Validate from Hook?"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-06-08 23:53:09.644908",
+ "modified": "2025-06-09 17:34:38.809594",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload Settings",
