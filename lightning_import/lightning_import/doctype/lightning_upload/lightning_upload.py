@@ -126,9 +126,15 @@ class LightningUpload(Document):
 				if missing_fields:
 					raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
 				
-				# Generate docname
-				docname = self.generate_docname(row)
-				converted_data['name'] = docname
+				# Generate docname only for new records
+				if self.import_type == "Insert New Records":
+					docname = self.generate_docname(row)
+					converted_data['name'] = docname
+				elif self.import_type == "Update Existing Records":
+					# For updates, use the name from the CSV
+					if not row.get('name'):
+						raise ValueError("Name field is required for updating existing records")
+					converted_data['name'] = row['name']
 				
 				# Add default fields if not present
 				if 'owner' not in converted_data:
@@ -169,29 +175,54 @@ class LightningUpload(Document):
 				# Filter fields that are actually present in our data
 				fields = [f for f in all_fields if f in records[0]]
 				
-				# Convert records to SQL values
-				values = []
-				for record in records:
-					row_values = []
-					for field in fields:
-						value = record.get(field)
-						if value is None:
-							row_values.append('NULL')
-						elif isinstance(value, (int, float)):
-							row_values.append(str(value))
-						elif isinstance(value, (frappe.utils.datetime.datetime, frappe.utils.datetime.date)):
-							row_values.append(frappe.db.escape(value.strftime('%Y-%m-%d %H:%M:%S')))
-						else:
-							row_values.append(frappe.db.escape(cstr(value)))
-					values.append(f"({', '.join(row_values)})")
+				if self.import_type == "Insert New Records":
+					# Convert records to SQL values for INSERT
+					values = []
+					for record in records:
+						row_values = []
+						for field in fields:
+							value = record.get(field)
+							if value is None:
+								row_values.append('NULL')
+							elif isinstance(value, (int, float)):
+								row_values.append(str(value))
+							elif isinstance(value, (frappe.utils.datetime.datetime, frappe.utils.datetime.date)):
+								row_values.append(frappe.db.escape(value.strftime('%Y-%m-%d %H:%M:%S')))
+							else:
+								row_values.append(frappe.db.escape(cstr(value)))
+						values.append(f"({', '.join(row_values)})")
+					
+					# Execute bulk insert
+					sql = f"""
+						INSERT INTO `tab{self.import_doctype}` 
+						(`{'`, `'.join(fields)}`)
+						VALUES {', '.join(values)}
+					"""
+					frappe.db.sql(sql)
+				else:
+					# For updates, execute individual UPDATE statements
+					for record in records:
+						# Skip system fields that shouldn't be updated
+						update_fields = [f for f in fields if f not in ['name', 'doctype', 'owner', 'creation']]
+						set_clauses = []
+						for field in update_fields:
+							value = record.get(field)
+							if value is None:
+								set_clauses.append(f"`{field}` = NULL")
+							elif isinstance(value, (int, float)):
+								set_clauses.append(f"`{field}` = {value}")
+							elif isinstance(value, (frappe.utils.datetime.datetime, frappe.utils.datetime.date)):
+								set_clauses.append(f"`{field}` = {frappe.db.escape(value.strftime('%Y-%m-%d %H:%M:%S'))}")
+							else:
+								set_clauses.append(f"`{field}` = {frappe.db.escape(cstr(value))}")
+						
+						sql = f"""
+							UPDATE `tab{self.import_doctype}`
+							SET {', '.join(set_clauses)}
+							WHERE name = {frappe.db.escape(record['name'])}
+						"""
+						frappe.db.sql(sql)
 				
-				# Execute bulk insert
-				sql = f"""
-					INSERT INTO `tab{self.import_doctype}` 
-					(`{'`, `'.join(fields)}`)
-					VALUES {', '.join(values)}
-				"""
-				frappe.db.sql(sql)
 				frappe.db.commit()
 				
 			except Exception as e:
@@ -578,7 +609,8 @@ def start_import(docname):
 			"lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.process_import_queue",
 			docname=docname,
 			now=False,
-			queue="long"
+			queue="long",
+			timeout=3600
 		)
 		
 		return {
