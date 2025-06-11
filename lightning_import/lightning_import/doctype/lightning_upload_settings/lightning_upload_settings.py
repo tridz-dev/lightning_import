@@ -24,3 +24,9 @@ class LightningUploadSettings(Document):
 		"""Get the configured batch size"""
 		settings = frappe.get_single("Lightning Upload Settings")
 		return int(settings.batch_size or 1000)
+
+	@staticmethod
+	def get_validate_from_hook():
+		"""Get whether validation from hooks is enabled"""
+		settings = frappe.get_single("Lightning Upload Settings")
+		return bool(settings.validate_from_hook)

@@ -242,3 +242,6 @@ app_license = "mit"
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
 
+custom_hooks=[
+    "lightning_import_validate_row"
+]

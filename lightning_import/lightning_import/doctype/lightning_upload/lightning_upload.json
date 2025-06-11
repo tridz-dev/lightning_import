@@ -17,15 +17,18 @@
   "failed_records",
   "last_processed_row",
   "import_time",
+  "timing_details",
   "error_log"
  ],
  "fields": [
   {
+   "default": "Draft",
    "fieldname": "status",
    "fieldtype": "Select",
    "hidden": 1,
    "in_list_view": 1,
    "label": "Status",
+   "no_copy": 1,
    "options": "Draft\nQueued\nIn Progress\nCompleted\nFailed\nPartial Success",
    "read_only": 1
   },
@@ -58,55 +61,72 @@
    "fieldname": "total_data",
    "fieldtype": "Data",
    "label": "Total Data",
+   "no_copy": 1,
    "read_only": 1
   },
   {
    "fieldname": "error_file",
    "fieldtype": "Attach",
    "label": "Error File",
+   "no_copy": 1,
    "read_only": 1
   },
   {
    "fieldname": "total_records",
    "fieldtype": "Data",
    "label": "Total Records",
+   "no_copy": 1,
    "read_only": 1
   },
   {
    "fieldname": "successful_records",
    "fieldtype": "Data",
    "label": "Successful Records",
+   "no_copy": 1,
    "read_only": 1
   },
   {
    "fieldname": "failed_records",
    "fieldtype": "Data",
    "label": "Failed Records",
+   "no_copy": 1,
    "read_only": 1
   },
   {
    "fieldname": "last_processed_row",
    "fieldtype": "Data",
    "label": "Last Processed Row",
+   "no_copy": 1,
    "read_only": 1
   },
   {
    "fieldname": "import_time",
    "fieldtype": "Data",
    "label": "Import Time",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "description": "Detailed timing information for the import process",
+   "fieldname": "timing_details",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Timing Details",
+   "no_copy": 1,
    "read_only": 1
   },
   {
    "fieldname": "error_log",
    "fieldtype": "Long Text",
    "label": "Error Log",
+   "no_copy": 1,
    "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-06-09 01:24:36.649737",
+ "modified": "2025-06-10 17:57:04.016267",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",
