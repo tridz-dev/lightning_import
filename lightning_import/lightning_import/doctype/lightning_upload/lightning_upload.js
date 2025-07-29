@@ -1,12 +1,6 @@
 // Copyright (c) 2025, Tridz Technologies Pvt Ltd and contributors
 // For license information, please see license.txt
 
-// frappe.ui.form.on("Lightning Upload", {
-// 	refresh(frm) {
-
-// 	},
-// });
-
 // Store progress state globally
 frappe.progress_state = {
     is_importing: false,
@@ -35,6 +29,12 @@ frappe.ui.form.on('Lightning Upload', {
             frm.page.set_primary_action(__('Start Import'), () => {
                 start_import(frm);
             });
+            // Add Map Fields button if CSV file is attached
+            if (frm.doc.csv_file) {
+                frm.add_custom_button(__('Map Fields'), () => {
+                    open_field_mapping_dialog(frm);
+                });
+            }
         } else {
             // Remove the primary action button if not in Draft status
             frm.page.clear_primary_action();
@@ -233,6 +233,12 @@ function update_progress(frm, data) {
 function start_import(frm) {
     console.log('[Lightning Import] Starting import for form:', frm.doc.name);
     
+    // Check if field mapping exists
+    if (!frm.doc.field_mapping) {
+        frappe.msgprint(__('Please map fields before starting import'));
+        return;
+    }
+    
     // Add progress bar before starting import
     if (!frm.progress_bar) {
         console.log('[Lightning Import] Creating initial progress bar');
@@ -293,6 +299,144 @@ function export_error_rows(frm) {
                     indicator: 'red'
                 });
             }
+        }
+    });
+}
+
+// --- Field Mapping Dialog ---
+function open_field_mapping_dialog(frm) {
+    frappe.call({
+        method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+        args: { docname: frm.doc.name },
+        callback: function(csvRes) {
+            if (!csvRes.message || csvRes.message.status !== 'success') {
+                frappe.show_alert({ message: csvRes.message ? csvRes.message.message : __('Failed to fetch CSV headers'), indicator: 'red' });
+                return;
+            }
+
+            const csvHeaders = csvRes.message.headers;
+            frappe.call({
+                method: 'lightning_import.lightning_import.api.get_fields.get_doctype_fields',
+                args: { doctype: frm.doc.import_doctype },
+                callback: function (dtRes) {
+                    if (!dtRes.message || !dtRes.message.fields) {
+                        frappe.show_alert({ message: __('Failed to fetch DocType fields'), indicator: 'red' });
+                        return;
+                    }
+            
+                    const fieldOptions = dtRes.message.fields || [];
+                    
+                    const normalize = str => (typeof str === 'string' ? str.toLowerCase().replace(/[\s_]+/g, '') : '');
+            
+                    const normalizedFieldMap = {};
+                    fieldOptions.forEach(f => {
+                        if (f.fieldname) {
+                            normalizedFieldMap[normalize(f.fieldname)] = f.fieldname;
+                            if (f.label) {
+                                normalizedFieldMap[normalize(f.label)] = f.fieldname;
+                            }
+                        }
+                    });
+                    normalizedFieldMap['id'] = 'name';
+                    normalizedFieldMap['name'] = 'first_name'
+            
+                    frappe.model.with_doctype(frm.doc.import_doctype, () => {
+                        const meta = frappe.get_meta(frm.doc.import_doctype);
+                        const requiredFields = meta.fields.filter(f => f.reqd).map(f => f.fieldname);
+            
+                        let existingMapping = {};
+                        try {
+                            if (frm.doc.field_mapping) {
+                                existingMapping = JSON.parse(frm.doc.field_mapping);
+                            }
+                        } catch (e) { 
+                            console.log('Error parsing existing mapping:', e);
+                        }
+            
+                        const mapping = {};
+                        csvHeaders.forEach(header => {
+                            const normalizedHeader = normalize(header);
+                            if (existingMapping[header]) {
+                                mapping[header] = existingMapping[header];
+                            } else if (normalizedFieldMap[normalizedHeader]) {
+                                mapping[header] = normalizedFieldMap[normalizedHeader];
+                            } else {
+                                mapping[header] = '';
+                            }
+                        });
+            
+                        let tableHtml = `<div style="margin-bottom:16px"><b>Map columns from <span style='color:#007bff'>${frappe.utils.escape_html(frm.doc.csv_file.split('/').pop())}</span> to fields in <span style='color:#007bff'>${frappe.utils.escape_html(frm.doc.import_doctype)}</span></b></div>`;
+                        tableHtml += `<table class="table table-bordered" style="width:100%;background:#fff"><thead><tr><th style='width:50%'>CSV Column</th><th style='width:50%'>DocType Field</th></tr></thead><tbody>`;
+            
+                        csvHeaders.forEach(header => {
+                            tableHtml += `<tr><td><input type='text' class='form-control' value='${frappe.utils.escape_html(header)}' readonly tabindex='-1'></td>`;
+                            tableHtml += `<td><select class='form-control field-mapping-select' data-header="${frappe.utils.escape_html(header)}">`;
+                            tableHtml += `<option value=''>Don't Import</option>`;
+                            fieldOptions.forEach(field => {
+                                const label = field.label || field.fieldname;
+                                const displayText = `${label} (${field.fieldname})`;
+                                const selected = mapping[header] === field.fieldname ? 'selected' : '';
+                                const escapedDisplay = frappe.utils.escape_html(displayText);
+                                const escapedField = frappe.utils.escape_html(field.fieldname);
+                                tableHtml += `<option value="${escapedField}" ${selected}>${escapedDisplay}</option>`;
+                            });
+                            tableHtml += `</select></td></tr>`;
+                        });
+            
+                        tableHtml += `</tbody></table>`;
+            
+                        const d = new frappe.ui.Dialog({
+                            title: __('Map Columns'),
+                            fields: [
+                                { fieldtype: 'HTML', fieldname: 'mapping_table', options: tableHtml }
+                            ],
+                            primary_action_label: __('Save Mapping'), // <-- 1. Button label changed
+                            primary_action() {
+                                const values = {};
+                                d.$wrapper.find('.field-mapping-select').each(function () {
+                                    const header = $(this).data('header');
+                                    const value = $(this).val();
+                                    values[header] = value;
+                                });
+            
+                                const mappedFields = Object.values(values).filter(Boolean);
+                                const unmappedRequired = requiredFields.filter(f => !mappedFields.includes(f));
+                                if (unmappedRequired.length) {
+                                    frappe.msgprint(__('Please map all required fields: {0}', [unmappedRequired.join(', ')]));
+                                    return;
+                                }
+            
+                                const duplicates = mappedFields.filter((item, idx) => mappedFields.indexOf(item) !== idx);
+                                if (duplicates.length) {
+                                    frappe.msgprint(__('Duplicate mapping for: {0}', [duplicates.join(', ')]));
+                                    return;
+                                }
+            
+                                frappe.call({
+                                    method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.save_field_mapping',
+                                    args: {
+                                        docname: frm.doc.name,
+                                        mapping: JSON.stringify(values)
+                                    },
+                                    callback: function (res) {
+                                        if (res.message && res.message.status === 'success') {
+                                            d.hide();
+                                            // 2. The call to start_import is removed. We only reload the form.
+                                            frm.reload_doc(); 
+                                            // 3. Success message is updated.
+                                            frappe.show_alert({ message: __('Field mapping saved.'), indicator: 'green' });
+                                        } else {
+                                            frappe.show_alert({ message: res.message?.message || __('Failed to save mapping'), indicator: 'red' });
+                                        }
+                                    }
+                                });
+                            }
+                        });
+            
+                        d.show();
+                    });
+                }
+            });
         }
     });
 }

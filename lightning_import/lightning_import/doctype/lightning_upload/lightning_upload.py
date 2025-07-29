@@ -76,6 +76,26 @@ class LightningUpload(Document):
 			reader = csv.DictReader(csvfile)
 			return list(reader)
 
+	def get_mapped_data(self):
+		"""Return list of mapped CSV rows using saved field mapping"""
+		raw_rows = self.get_csv_data()
+		
+		# Load mapping (JSON string to dict)
+		if not self.field_mapping:
+			frappe.throw("Field mapping is not defined")
+
+		mapping = json.loads(self.field_mapping)
+		mapped_rows = []
+
+		for row in raw_rows:
+			mapped_row = {}
+			for csv_field, doctype_field in mapping.items():
+				if doctype_field:  # Only map if field is not empty (not restricted)
+					mapped_row[doctype_field] = row.get(csv_field, None)
+			mapped_rows.append(mapped_row)
+
+		return mapped_rows
+
 	def generate_docname(self, row_data):
 		"""Generate a unique docname based on row data"""
 		# Get current timestamp in microseconds
@@ -91,18 +111,13 @@ class LightningUpload(Document):
 		success_count = 0
 		failed_rows = []
 		
-		# Get field types from meta
 		meta = frappe.get_meta(self.import_doctype)
 		field_types = {f.fieldname: f.fieldtype for f in meta.fields}
-		
-		# Get required fields from meta
 		required_fields = [f.fieldname for f in meta.fields if f.reqd]
 		
-		# Prepare data for bulk insert
 		records = []
 		for row in rows:
 			try:
-				# Convert values based on field type
 				converted_data = {}
 				for field, value in row.items():
 					if field in field_types:
@@ -120,23 +135,21 @@ class LightningUpload(Document):
 								converted_data[field] = value
 						except (ValueError, TypeError):
 							raise ValueError(f"Invalid value for field {field}: {value}")
+					else:
+						converted_data[field] = value
 				
-				# Check required fields
-				missing_fields = [f for f in required_fields if f not in converted_data]
+				missing_fields = [f for f in required_fields if f not in converted_data or converted_data[f] is None]
 				if missing_fields:
 					raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
 				
-				# Generate docname only for new records
 				if self.import_type == "Insert New Records":
 					docname = self.generate_docname(row)
 					converted_data['name'] = docname
 				elif self.import_type == "Update Existing Records":
-					# For updates, use the name from the CSV
 					if not row.get('name'):
 						raise ValueError("Name field is required for updating existing records")
 					converted_data['name'] = row['name']
 				
-				# Add default fields if not present
 				if 'owner' not in converted_data:
 					converted_data['owner'] = frappe.session.user
 				if 'modified_by' not in converted_data:
@@ -146,37 +159,31 @@ class LightningUpload(Document):
 				if 'modified' not in converted_data:
 					converted_data['modified'] = frappe.utils.now()
 				
-				# Validate row data here
+				# REMOVED: The unnecessary addition of 'doctype' to the record dictionary
+				# if 'doctype' not in converted_data:
+				# 	converted_data['doctype'] = self.import_doctype
+				
 				try:
 					self.validate_row_data(converted_data)
 				except Exception as e:
-					failed_rows.append({
-						'row': row,
-						'error': str(e)
-					})
+					failed_rows.append({'row': row, 'error': str(e)})
 					continue
 				
 				records.append(converted_data)
 				success_count += 1
 				
 			except Exception as e:
-				failed_rows.append({
-					'row': row,
-					'error': str(e)
-				})
+				failed_rows.append({'row': row, 'error': str(e)})
 		
-		# Bulk insert if we have records
 		if records:
 			try:
-				# Get all possible fields from meta
-				all_fields = ['name', 'doctype', 'owner', 'modified_by', 'creation', 'modified']
+				# CORRECTED: Removed 'doctype' from the list of fields to insert
+				all_fields = ['name', 'owner', 'modified_by', 'creation', 'modified']
 				all_fields.extend([f.fieldname for f in meta.fields])
 				
-				# Filter fields that are actually present in our data
 				fields = [f for f in all_fields if f in records[0]]
 				
 				if self.import_type == "Insert New Records":
-					# Convert records to SQL values for INSERT
 					values = []
 					for record in records:
 						row_values = []
@@ -192,7 +199,6 @@ class LightningUpload(Document):
 								row_values.append(frappe.db.escape(cstr(value)))
 						values.append(f"({', '.join(row_values)})")
 					
-					# Execute bulk insert
 					sql = f"""
 						INSERT INTO `tab{self.import_doctype}` 
 						(`{'`, `'.join(fields)}`)
@@ -200,10 +206,9 @@ class LightningUpload(Document):
 					"""
 					frappe.db.sql(sql)
 				else:
-					# For updates, execute individual UPDATE statements
 					for record in records:
-						# Skip system fields that shouldn't be updated
-						update_fields = [f for f in fields if f not in ['name', 'doctype', 'owner', 'creation']]
+						# CORRECTED: 'doctype' removed from fields that should not be updated
+						update_fields = [f for f in fields if f not in ['name', 'owner', 'creation']]
 						set_clauses = []
 						for field in update_fields:
 							value = record.get(field)
@@ -227,17 +232,13 @@ class LightningUpload(Document):
 				
 			except Exception as e:
 				frappe.db.rollback()
-				# If bulk insert fails, mark all records as failed
-				failed_rows.extend([{
-					'row': record,
-					'error': str(e)
-				} for record in records])
+				failed_rows.extend([{'row': record, 'error': str(e)} for record in records])
 				success_count = 0
 		
 		return {
 			'success_count': success_count,
 			'failed_rows': failed_rows
-		}
+	}
 
 	def generate_error_file(self, failed_rows):
 		"""Generate a CSV file containing failed rows with error messages"""
@@ -344,7 +345,7 @@ def process_import_queue(docname):
 		
 		# Get CSV data with timing
 		csv_start = time.time()
-		csv_data = doc.get_csv_data()
+		csv_data = doc.get_mapped_data()
 		csv_time = round((time.time() - csv_start) * 1000, 2)
 		total_rows = len(csv_data)
 		
@@ -538,6 +539,11 @@ def process_import_queue(docname):
 			"message": str(e)
 		}
 
+# Alias mapping (CSV Header → Fieldname)
+alias_map = {
+    "id": "name",  # map 'ID' to 'name'
+}
+
 @frappe.whitelist()
 def start_import(docname):
 	"""API endpoint to start the import process"""
@@ -547,6 +553,10 @@ def start_import(docname):
 		# Validate document status
 		if doc.status != "Draft":
 			frappe.throw(_("Import can only be started from Draft status"))
+		
+		# Check if field mapping exists
+		if not doc.field_mapping:
+			frappe.throw(_("Please map fields before starting import"))
 		
 		# Get file path and validate CSV
 		file_doc = frappe.get_doc("File", {"file_url": doc.csv_file})
@@ -558,28 +568,21 @@ def start_import(docname):
 		# Get DocType fields
 		doctype_fields = get_doctype_fields(doc.import_doctype)
 		
-		# Validate headers
-		matching_fields = []
-		non_matching_fields = []
+		# Validate field mapping
+		try:
+			mapping = json.loads(doc.field_mapping)
+		except json.JSONDecodeError:
+			frappe.throw(_("Invalid field mapping format"))
 		
-		for header in csv_headers:
-			if header in doctype_fields:
-				matching_fields.append(header)
-			else:
-				non_matching_fields.append(header)
-		
-		if not matching_fields:
-			frappe.throw(_("No matching fields found between CSV headers and {0} DocType fields").format(doc.import_doctype))
-		
-		if non_matching_fields:
-			error_msg = _("CSV headers do not match DocType fields. Please fix the following headers:\n\n")
-			error_msg += _("Non-matching headers: {0}\n\n").format(", ".join(non_matching_fields))
-			error_msg += _("Available DocType fields: {0}").format(", ".join(doctype_fields))
-			frappe.throw(error_msg)
+		# Check if mapped fields exist in doctype
+		mapped_fields = [field for field in mapping.values() if field]
+		invalid_fields = [field for field in mapped_fields if field not in doctype_fields]
+		if invalid_fields:
+			frappe.throw(_("Invalid fields in mapping: {0}").format(", ".join(invalid_fields)))
 		
 		# Additional validation for update type
-		if doc.import_type == "Update Existing Records" and "name" not in csv_headers:
-			frappe.throw(_("Column 'name' is required for updating existing records"))
+		if doc.import_type == "Update Existing Records" and "name" not in mapped_fields:
+			frappe.throw(_("Field 'name' must be mapped for updating existing records"))
 
 		# Initialize progress in cache before enqueueing
 		progress_key = f"lightning_import_{docname}"
@@ -616,7 +619,6 @@ def start_import(docname):
 		return {
 			"status": "success",
 			"message": _("Import process started successfully"),
-			"matching_fields": matching_fields,
 			"progress_key": progress_key  # Send progress key to client
 		}
 		
@@ -675,3 +677,28 @@ def export_error_rows(docname):
 			"status": "error",
 			"message": str(e)
 		}
+
+@frappe.whitelist()
+def get_csv_headers_for_upload(docname):
+    """Return the CSV headers for a given Lightning Upload docname"""
+    try:
+        doc = frappe.get_doc("Lightning Upload", docname)
+        file_doc = frappe.get_doc("File", {"file_url": doc.csv_file})
+        file_path = file_doc.get_full_path()
+        headers = get_csv_headers(file_path)
+        return {"status": "success", "headers": headers}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Lightning Import Get CSV Headers Error")
+        return {"status": "error", "message": str(e)}
+
+@frappe.whitelist()
+def save_field_mapping(docname, mapping):
+    """Save the field mapping JSON to the Lightning Upload doc"""
+    try:
+        # Use db.set_value for a direct, efficient update that bypasses validation hooks.
+        frappe.db.set_value("Lightning Upload", docname, "field_mapping", mapping)
+        return {"status": "success"}
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Lightning Import Save Field Mapping Error")
+        # Propagate the error to the client for a clear message
+        raise

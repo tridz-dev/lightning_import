@@ -10,6 +10,7 @@
   "import_doctype",
   "import_type",
   "csv_file",
+  "field_mapping",
   "total_data",
   "error_file",
   "total_records",
@@ -56,6 +57,15 @@
    "label": "CSV File",
    "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\"",
    "reqd": 1
+  },
+  {
+   "fieldname": "field_mapping",
+   "fieldtype": "Code",
+   "label": "Field Mapping",
+   "description": "Mapping between CSV columns and DocType fields (JSON)",
+   "no_copy": 1,
+   "read_only": 1,
+   "hidden": 1
   },
   {
    "fieldname": "total_data",
