@@ -231,57 +231,87 @@ function update_progress(frm, data) {
 }
 
 function start_import(frm) {
-    console.log('[Lightning Import] Starting import for form:', frm.doc.name);
-    
-    // Check if field mapping exists
-    if (!frm.doc.field_mapping) {
-        frappe.msgprint(__('Please map fields before starting import'));
-        return;
-    }
-    
-    // Add progress bar before starting import
-    if (!frm.progress_bar) {
-        console.log('[Lightning Import] Creating initial progress bar');
-        frm.progress_bar = $(`
-            <div class="progress-bar-container" style="margin: 20px 0;">
-                <div class="progress" style="height: 20px; margin-bottom: 10px;">
-                    <div class="progress-bar" role="progressbar" style="width: 0%;" 
-                        aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+    // Helper function to make the final call to start the import
+    const call_start_import_py = (mapping_json = null) => {
+        if (!frm.progress_bar) {
+            frm.progress_bar = $(`
+                <div class="progress-bar-container" style="margin: 20px 0;">
+                    <div class="progress" style="height: 20px; margin-bottom: 10px;">
+                        <div class="progress-bar" role="progressbar" style="width: 0%;"></div>
                     </div>
+                    <div class="progress-status text-muted">Starting import...</div>
                 </div>
-                <div class="progress-status text-muted">Starting import...</div>
-            </div>
-        `).insertAfter(frm.page.main);
-    }
-
-    frappe.call({
-        method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.start_import',
-        args: {
-            docname: frm.doc.name
-        },
-        callback: function(r) {
-            console.log('[Lightning Import] Start import callback:', r);
-            if (r.message && r.message.status === 'success') {
-                console.log('[Lightning Import] Import started successfully');
-                frappe.show_alert({
-                    message: r.message.message,
-                    indicator: 'green'
-                });
-            } else {
-                console.log('[Lightning Import] Failed to start import:', r.message);
-                // Hide progress bar on error
-                if (frm.progress_bar) {
-                    console.log('[Lightning Import] Removing progress bar due to error');
-                    frm.progress_bar.remove();
-                    frm.progress_bar = null;
-                }
-                frappe.show_alert({
-                    message: r.message.message || __('Failed to start import'),
-                    indicator: 'red'
-                });
-            }
+            `).insertAfter(frm.page.main);
         }
-    });
+
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.start_import',
+            args: {
+                docname: frm.doc.name,
+                mapping: mapping_json
+            },
+            callback: function(r) {
+                if (r.message && r.message.status === 'success') {
+                    frappe.show_alert({
+                        message: r.message.message,
+                        indicator: 'green'
+                    });
+                } else {
+                    if (frm.progress_bar) {
+                        frm.progress_bar.remove();
+                        frm.progress_bar = null;
+                    }
+                    frappe.show_alert({
+                        message: r.message.message || __('Failed to start import'),
+                        indicator: 'red'
+                    });
+                }
+            }
+        });
+    };
+
+    // Main logic starts here
+    if (frm.doc.field_mapping) {
+        // If a mapping is already saved, proceed directly.
+        call_start_import_py();
+    } else {
+        // If no mapping exists, perform auto-mapping and validation.
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_and_validate',
+            args: { docname: frm.doc.name },
+            callback: function(r) {
+                if (!r.message) {
+                    frappe.msgprint(__('Error during auto-mapping. Please map fields manually.'));
+                    return;
+                }
+                const data = r.message;
+                if (data.unmapped_required.length > 0) {
+                    // If required fields are missing, ask the user what to do.
+                    frappe.confirm(
+                        __('The following required fields could not be auto-mapped: <br><b>{0}</b>. <br><br>Rows without these fields will fail to import. Do you want to continue anyway?', [data.unmapped_required.join(', ')]),
+                        () => {
+                            // User chose to "Continue Anyway"
+                            call_start_import_py(JSON.stringify(data.mapping));
+                        },
+                        () => {
+                            // User chose to "Cancel and Map Fields"
+                            open_field_mapping_dialog(frm);
+                        },
+                        __('Missing Required Fields'),
+                        __('Continue Anyway'),
+                        __('Cancel and Map Fields')
+                    );
+                } else {
+                    // If all required fields were auto-mapped, start the import.
+                    frappe.show_alert({
+                        message: __('All required fields were auto-mapped. Starting import...'),
+                        indicator: 'green'
+                    });
+                    call_start_import_py(JSON.stringify(data.mapping));
+                }
+            }
+        });
+    }
 }
 
 function export_error_rows(frm) {
@@ -390,12 +420,13 @@ function open_field_mapping_dialog(frm) {
                             fields: [
                                 { fieldtype: 'HTML', fieldname: 'mapping_table', options: tableHtml }
                             ],
-                            primary_action_label: __('Save Mapping'), // <-- 1. Button label changed
+                            primary_action_label: __('Save Mapping'),
                             primary_action() {
                                 const values = {};
                                 d.$wrapper.find('.field-mapping-select').each(function () {
                                     const header = $(this).data('header');
                                     const value = $(this).val();
+
                                     values[header] = value;
                                 });
             
@@ -421,9 +452,7 @@ function open_field_mapping_dialog(frm) {
                                     callback: function (res) {
                                         if (res.message && res.message.status === 'success') {
                                             d.hide();
-                                            // 2. The call to start_import is removed. We only reload the form.
                                             frm.reload_doc(); 
-                                            // 3. Success message is updated.
                                             frappe.show_alert({ message: __('Field mapping saved.'), indicator: 'green' });
                                         } else {
                                             frappe.show_alert({ message: res.message?.message || __('Failed to save mapping'), indicator: 'red' });
