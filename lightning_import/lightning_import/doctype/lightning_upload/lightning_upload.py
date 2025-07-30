@@ -107,133 +107,169 @@ class LightningUpload(Document):
 		return f"{self.import_doctype}-{unique_id}"
 
 	def insert_records(self, rows):
-		"""Insert records in bulk using SQL"""
-		success_count = 0
-		failed_rows = []
-		
-		meta = frappe.get_meta(self.import_doctype)
-		field_types = {f.fieldname: f.fieldtype for f in meta.fields}
-		required_fields = [f.fieldname for f in meta.fields if f.reqd]
-		
-		records = []
-		for row in rows:
+			"""Insert or update records in bulk using SQL, with a configurable update key."""
+			success_count = 0
+			failed_rows = []
+			
+			meta = frappe.get_meta(self.import_doctype)
+			field_types = {f.fieldname: f.fieldtype for f in meta.fields}
+			required_fields = [f.fieldname for f in meta.fields if f.reqd]
+			
+			# Step 1: Prepare all rows first (data conversion, validation)
+			records_to_process = []
+			for row in rows:
+					try:
+							converted_data = {}
+							for field, value in row.items():
+									# Convert data types based on the DocType's schema
+									if field in field_types:
+											field_type = field_types[field]
+											try:
+													if value:
+															if field_type == "Int": converted_data[field] = int(value)
+															elif field_type == "Float": converted_data[field] = float(value)
+															elif field_type == "Date": converted_data[field] = frappe.utils.getdate(value)
+															elif field_type == "Datetime": converted_data[field] = frappe.utils.get_datetime(value)
+															else: converted_data[field] = value
+													else:
+															converted_data[field] = None
+											except (ValueError, TypeError):
+													raise ValueError(f"Invalid value for field {field}: {value}")
+									else:
+											converted_data[field] = value
+							
+							# Check for missing required fields
+							missing_fields = [f for f in required_fields if not converted_data.get(f)]
+							if missing_fields:
+									raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+
+							# Add common system-managed fields
+							if 'owner' not in converted_data: converted_data['owner'] = frappe.session.user
+							if 'modified_by' not in converted_data: converted_data['modified_by'] = frappe.session.user
+							if 'creation' not in converted_data: converted_data['creation'] = frappe.utils.now()
+							if 'modified' not in converted_data: converted_data['modified'] = frappe.utils.now()
+							
+							# Run custom validation hook if it exists
+							self.validate_row_data(converted_data)
+							
+							records_to_process.append(converted_data)
+
+					except Exception as e:
+							failed_rows.append({'row': row, 'error': str(e)})
+
+			if not records_to_process:
+					return {'success_count': 0, 'failed_rows': failed_rows}
+
+			# Step 2: Main logic fork based on the selected import type
 			try:
-				converted_data = {}
-				for field, value in row.items():
-					if field in field_types:
-						field_type = field_types[field]
-						try:
-							if field_type == "Int":
-								converted_data[field] = int(value) if value else None
-							elif field_type == "Float":
-								converted_data[field] = float(value) if value else None
-							elif field_type == "Date":
-								converted_data[field] = frappe.utils.getdate(value) if value else None
-							elif field_type == "Datetime":
-								converted_data[field] = frappe.utils.get_datetime(value) if value else None
-							else:
-								converted_data[field] = value
-						except (ValueError, TypeError):
-							raise ValueError(f"Invalid value for field {field}: {value}")
-					else:
-						converted_data[field] = value
-				
-				missing_fields = [f for f in required_fields if f not in converted_data or not converted_data[f]]
-				if missing_fields:
-					raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
-				
-				if self.import_type == "Insert New Records":
-					docname = self.generate_docname(row)
-					converted_data['name'] = docname
-				elif self.import_type == "Update Existing Records":
-					if not row.get('name'):
-						raise ValueError("Name field is required for updating existing records")
-					converted_data['name'] = row['name']
-				
-				if 'owner' not in converted_data:
-					converted_data['owner'] = frappe.session.user
-				if 'modified_by' not in converted_data:
-					converted_data['modified_by'] = frappe.session.user
-				if 'creation' not in converted_data:
-					converted_data['creation'] = frappe.utils.now()
-				if 'modified' not in converted_data:
-					converted_data['modified'] = frappe.utils.now()
-				
-				try:
-					self.validate_row_data(converted_data)
-				except Exception as e:
-					failed_rows.append({'row': row, 'error': str(e)})
-					continue
-				
-				records.append(converted_data)
-				
+					if self.import_type == "Insert and Update Records":
+							# --- UPSERT LOGIC ---
+							# 1. Get the user-selected CSV column and find its mapped DocType field.
+							mapping = json.loads(self.field_mapping)
+							update_on_csv_col = self.update_on_field
+							if not update_on_csv_col:
+									raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
+							
+							mapped_update_field = mapping.get(update_on_csv_col)
+							if not mapped_update_field:
+									raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
+
+							# 2. Collect all unique key values from the current batch.
+							keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
+							
+							# 3. Query the database once to find all existing documents.
+							existing_docs_map = {}
+							if keys_to_check:
+									existing = frappe.get_all(
+											self.import_doctype,
+											filters={mapped_update_field: ['in', keys_to_check]},
+											fields=['name', mapped_update_field]
+									)
+									existing_docs_map = {doc[mapped_update_field]: doc.name for doc in existing}
+
+							# 4. Split the batch into two lists: one for new records (insert) and one for existing ones (update).
+							to_insert = []
+							to_update = []
+							for record in records_to_process:
+									key_value = record.get(mapped_update_field)
+									if key_value in existing_docs_map:
+											record['name'] = existing_docs_map[key_value] # Assign existing doc name for update
+											to_update.append(record)
+									else:
+											record['name'] = self.generate_docname(record) # Generate a new name for insert
+											to_insert.append(record)
+
+							# 5. Perform the bulk database operations.
+							if to_insert:
+									self._execute_bulk_insert(to_insert)
+							if to_update:
+									self._execute_bulk_update(to_update)
+
+							success_count = len(to_insert) + len(to_update)
+
+					elif self.import_type == "Insert New Records":
+							for record in records_to_process:
+									record['name'] = self.generate_docname(record)
+							self._execute_bulk_insert(records_to_process)
+							success_count = len(records_to_process)
+
+					elif self.import_type == "Update Existing Records":
+							for record in records_to_process:
+									if not record.get('name'):
+											raise ValueError("Name (ID) field is required for updating existing records. Please map it.")
+							self._execute_bulk_update(records_to_process)
+							success_count = len(records_to_process)
+					
+					frappe.db.commit()
+
 			except Exception as e:
-				failed_rows.append({'row': row, 'error': str(e)})
-		
-		if records:
-			try:
-				all_fields = ['name', 'owner', 'modified_by', 'creation', 'modified']
-				all_fields.extend([f.fieldname for f in meta.fields])
-				
-				fields = [f for f in all_fields if f in records[0]]
-				
-				if self.import_type == "Insert New Records":
-					values = []
-					for record in records:
-						row_values = []
-						for field in fields:
-							value = record.get(field)
-							if value is None:
-								row_values.append('NULL')
-							elif isinstance(value, (int, float)):
-								row_values.append(str(value))
-							elif isinstance(value, (frappe.utils.datetime.datetime, frappe.utils.datetime.date)):
-								row_values.append(frappe.db.escape(value.strftime('%Y-%m-%d %H:%M:%S')))
-							else:
-								row_values.append(frappe.db.escape(cstr(value)))
-						values.append(f"({', '.join(row_values)})")
+					frappe.db.rollback()
+					for record in records_to_process:
+							failed_rows.append({'row': record, 'error': str(e)})
+					success_count = 0
+
+			return {'success_count': success_count, 'failed_rows': failed_rows}
+
+	def _execute_bulk_insert(self, records):
+			"""Helper function to perform a bulk INSERT operation."""
+			if not records: return
+			
+			meta = frappe.get_meta(self.import_doctype)
+			all_fields = ['name', 'owner', 'modified_by', 'creation', 'modified'] + [f.fieldname for f in meta.fields]
+			fields = sorted(list(set(k for r in records for k in r.keys() if k in all_fields)))
+			
+			values_list = []
+			for record in records:
+					row_values = [frappe.db.escape(cstr(record.get(f))) for f in fields]
+					values_list.append(f"({', '.join(row_values)})")
+			
+			sql = f"""
+					INSERT INTO `tab{self.import_doctype}` (`{'`, `'.join(fields)}`)
+					VALUES {', '.join(values_list)}
+			"""
+			frappe.db.sql(sql)
+
+	def _execute_bulk_update(self, records):
+			"""Helper function to perform bulk UPDATE operations."""
+			if not records: return
+			
+			meta = frappe.get_meta(self.import_doctype)
+			all_fields = ['name', 'owner', 'modified_by', 'creation', 'modified'] + [f.fieldname for f in meta.fields]
+			
+			for record in records:
+					fields_in_record = [f for f in all_fields if f in record]
+					update_fields = [f for f in fields_in_record if f not in ['name', 'owner', 'creation']]
+					
+					if not update_fields: continue
+
+					set_clauses = [f"`{field}` = {frappe.db.escape(cstr(record.get(field)))}" for field in update_fields]
 					
 					sql = f"""
-						INSERT INTO `tab{self.import_doctype}` 
-						(`{'`, `'.join(fields)}`)
-						VALUES {', '.join(values)}
-					"""
-					frappe.db.sql(sql)
-					success_count += len(records)
-				else:
-					for record in records:
-						update_fields = [f for f in fields if f not in ['name', 'owner', 'creation']]
-						set_clauses = []
-						for field in update_fields:
-							value = record.get(field)
-							if value is None:
-								set_clauses.append(f"`{field}` = NULL")
-							elif isinstance(value, (int, float)):
-								set_clauses.append(f"`{field}` = {value}")
-							elif isinstance(value, (frappe.utils.datetime.datetime, frappe.utils.datetime.date)):
-								set_clauses.append(f"`{field}` = {frappe.db.escape(value.strftime('%Y-%m-%d %H:%M:%S'))}")
-							else:
-								set_clauses.append(f"`{field}` = {frappe.db.escape(cstr(value))}")
-						
-						sql = f"""
 							UPDATE `tab{self.import_doctype}`
 							SET {', '.join(set_clauses)}
 							WHERE name = {frappe.db.escape(record['name'])}
-						"""
-						frappe.db.sql(sql)
-					success_count += len(records)
-				
-				frappe.db.commit()
-				
-			except Exception as e:
-				frappe.db.rollback()
-				failed_rows.extend([{'row': record, 'error': str(e)} for record in records])
-				success_count = 0
-		
-		return {
-			'success_count': success_count,
-			'failed_rows': failed_rows
-	}
+					"""
+					frappe.db.sql(sql)
 
 	def generate_error_file(self, failed_rows):
 		"""Generate a CSV file containing failed rows with error messages"""
