@@ -121,7 +121,6 @@ class LightningUpload(Document):
 					try:
 							converted_data = {}
 							for field, value in row.items():
-									# Convert data types based on the DocType's schema
 									if field in field_types:
 											field_type = field_types[field]
 											try:
@@ -138,18 +137,15 @@ class LightningUpload(Document):
 									else:
 											converted_data[field] = value
 							
-							# Check for missing required fields
 							missing_fields = [f for f in required_fields if not converted_data.get(f)]
 							if missing_fields:
 									raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
 
-							# Add common system-managed fields
 							if 'owner' not in converted_data: converted_data['owner'] = frappe.session.user
 							if 'modified_by' not in converted_data: converted_data['modified_by'] = frappe.session.user
 							if 'creation' not in converted_data: converted_data['creation'] = frappe.utils.now()
 							if 'modified' not in converted_data: converted_data['modified'] = frappe.utils.now()
 							
-							# Run custom validation hook if it exists
 							self.validate_row_data(converted_data)
 							
 							records_to_process.append(converted_data)
@@ -163,8 +159,6 @@ class LightningUpload(Document):
 			# Step 2: Main logic fork based on the selected import type
 			try:
 					if self.import_type == "Insert and Update Records":
-							# --- UPSERT LOGIC ---
-							# 1. Get the user-selected CSV column and find its mapped DocType field.
 							mapping = json.loads(self.field_mapping)
 							update_on_csv_col = self.update_on_field
 							if not update_on_csv_col:
@@ -174,10 +168,8 @@ class LightningUpload(Document):
 							if not mapped_update_field:
 									raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
 
-							# 2. Collect all unique key values from the current batch.
 							keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
 							
-							# 3. Query the database once to find all existing documents.
 							existing_docs_map = {}
 							if keys_to_check:
 									existing = frappe.get_all(
@@ -187,49 +179,50 @@ class LightningUpload(Document):
 									)
 									existing_docs_map = {doc[mapped_update_field]: doc.name for doc in existing}
 
-							# 4. Split the batch into two lists: one for new records (insert) and one for existing ones (update).
 							to_insert = []
 							to_update = []
 							for record in records_to_process:
 									key_value = record.get(mapped_update_field)
 									if key_value in existing_docs_map:
-											record['name'] = existing_docs_map[key_value] # Assign existing doc name for update
+											record['name'] = existing_docs_map[key_value]
 											to_update.append(record)
 									else:
-											record['name'] = self.generate_docname(record) # Generate a new name for insert
+											record['name'] = self.generate_docname(record)
 											to_insert.append(record)
 
-							# 5. Perform the bulk database operations.
+							# --- MODIFICATION: Process updates in smaller chunks ---
+							UPDATE_CHUNK_SIZE = 1000  # Adjust this value as needed
+							if to_update:
+								for i in range(0, len(to_update), UPDATE_CHUNK_SIZE):
+									chunk = to_update[i:i + UPDATE_CHUNK_SIZE]
+									self._execute_bulk_update(chunk)
+							
 							if to_insert:
 									self._execute_bulk_insert(to_insert)
-							if to_update:
-									self._execute_bulk_update(to_update)
 
 							success_count = len(to_insert) + len(to_update)
 
 					elif self.import_type == "Insert New Records":
 							for record in records_to_process:
-									record['name'] = self.generate_docname(record)
+								record['name'] = self.generate_docname(record)
 							self._execute_bulk_insert(records_to_process)
 							success_count = len(records_to_process)
 
 					elif self.import_type == "Update Existing Records":
-							for record in records_to_process:
-									if not record.get('name'):
-											raise ValueError("Name (ID) field is required for updating existing records. Please map it.")
-							self._execute_bulk_update(records_to_process)
-							success_count = len(records_to_process)
+						# --- MODIFICATION: Process updates in smaller chunks ---
+						UPDATE_CHUNK_SIZE = 1000  # Adjust this value as needed
+						for i in range(0, len(records_to_process), UPDATE_CHUNK_SIZE):
+							chunk = records_to_process[i:i + UPDATE_CHUNK_SIZE]
+							self._execute_bulk_update(chunk)
+						success_count = len(records_to_process)
 					
-					frappe.db.commit()
-
 			except Exception as e:
-					frappe.db.rollback()
+					# Frappe will handle rollback in the calling function
 					for record in records_to_process:
 							failed_rows.append({'row': record, 'error': str(e)})
 					success_count = 0
 
 			return {'success_count': success_count, 'failed_rows': failed_rows}
-
 	def _execute_bulk_insert(self, records):
 			"""Helper function to perform a bulk INSERT operation."""
 			if not records: return
@@ -250,26 +243,47 @@ class LightningUpload(Document):
 			frappe.db.sql(sql)
 
 	def _execute_bulk_update(self, records):
-			"""Helper function to perform bulk UPDATE operations."""
-			if not records: return
-			
-			meta = frappe.get_meta(self.import_doctype)
-			all_fields = ['name', 'owner', 'modified_by', 'creation', 'modified'] + [f.fieldname for f in meta.fields]
-			
-			for record in records:
-					fields_in_record = [f for f in all_fields if f in record]
-					update_fields = [f for f in fields_in_record if f not in ['name', 'owner', 'creation']]
-					
-					if not update_fields: continue
+		"""Helper function to perform a single bulk UPDATE operation using CASE WHEN."""
+		if not records:
+			return
 
-					set_clauses = [f"`{field}` = {frappe.db.escape(cstr(record.get(field)))}" for field in update_fields]
-					
-					sql = f"""
-							UPDATE `tab{self.import_doctype}`
-							SET {', '.join(set_clauses)}
-							WHERE name = {frappe.db.escape(record['name'])}
-					"""
-					frappe.db.sql(sql)
+		meta = frappe.get_meta(self.import_doctype)
+		# Exclude system fields from being updated directly, except 'modified' and 'modified_by'
+		# 'name' is used for the WHERE clause, not for updating
+		updatable_fields = [f.fieldname for f in meta.fields] + ['modified', 'modified_by']
+
+		# Get a list of all fields present in at least one record to be updated
+		fields_to_update = sorted(list(set(
+				k for r in records for k in r.keys() if k in updatable_fields
+		)))
+
+		if not fields_to_update:
+				return
+
+		set_clauses = []
+		for field in fields_to_update:
+			# Build the CASE statement for each field
+			case_statements = [
+				f"WHEN `name` = {frappe.db.escape(record['name'])} THEN {frappe.db.escape(cstr(record.get(field)))}"
+				for record in records if record.get('name') and record.get(field) is not None
+			]
+			
+			if case_statements:
+				set_clauses.append(f"`{field}` = CASE {' '.join(case_statements)} ELSE `{field}` END")
+
+		if not set_clauses:
+			return
+		
+		# Collect all the document names for the WHERE clause
+		names_to_update = [frappe.db.escape(record['name']) for record in records if record.get('name')]
+		unique_names = list(set(names_to_update))
+
+		sql = f"""
+			UPDATE `tab{self.import_doctype}`
+			SET {', '.join(set_clauses)}
+			WHERE `name` IN ({', '.join(unique_names)})
+	"""
+		frappe.db.sql(sql)
 
 	def generate_error_file(self, failed_rows):
 		"""Generate a CSV file containing failed rows with error messages"""
@@ -350,18 +364,22 @@ def get_csv_headers(file_path):
 			return [header.strip() for header in headers]
 	except Exception as e:
 		frappe.throw(f"Error reading CSV headers: {str(e)}")
-
+		
 @frappe.whitelist()
 def process_import_queue(docname):
 	"""Process the import in batches"""
 	start_time = time.time()
 	batch_timings = []
-	
+
 	try:
+		# --- Get the doc once outside the loop ---
 		doc = frappe.get_doc("Lightning Upload", docname)
-		frappe.db.set_value("Lightning Upload", docname, "status", "In Progress")
+
+		# Update initial status and total records
+		doc.status = "In Progress"
+		doc.save(ignore_permissions=True, ignore_version=True)
 		frappe.db.commit()
-		
+
 		progress_key = f"lightning_import_{docname}"
 		initial_progress = {
 			"status": "In Progress",
@@ -376,13 +394,13 @@ def process_import_queue(docname):
 			user=frappe.session.user,
 			after_commit=True
 		)
-		
 		csv_start = time.time()
 		csv_data = doc.get_mapped_data()
 		csv_time = round((time.time() - csv_start) * 1000, 2)
 		total_rows = len(csv_data)
-		
-		frappe.db.set_value("Lightning Upload", docname, "total_records", total_rows)
+		# Update total records on the doc object
+		doc.total_records = total_rows
+		doc.save(ignore_permissions=True, ignore_version=True)
 		frappe.db.commit()
 		frappe.publish_realtime(
 			event='import_progress',
@@ -396,33 +414,29 @@ def process_import_queue(docname):
 			user=frappe.session.user,
 			after_commit=True
 		)
-		
+
 		batch_size = LightningUploadSettings.get_batch_size()
 		successful_records = 0
 		failed_records = 0
 		all_failed_rows = []
-		
+
 		for i in range(0, total_rows, batch_size):
 			batch_start = time.time()
 			batch = csv_data[i:i + batch_size]
 			batch_num = (i // batch_size) + 1
 			total_batches = (total_rows + batch_size - 1) // batch_size
-			
+
 			progress = min(100, int((i / total_rows) * 100))
-			
-			frappe.db.set_value("Lightning Upload", docname, "last_processed_row", i + len(batch))
-			frappe.db.commit()
-			
-			doc = frappe.get_doc("Lightning Upload", docname)
-			
+
 			insert_start = time.time()
+			# The doc.insert_records(batch) call implicitly uses the updated doc object
 			result = doc.insert_records(batch)
 			insert_time = round((time.time() - insert_start) * 1000, 2)
-			
+
 			successful_records += result['success_count']
 			failed_records += len(result['failed_rows'])
 			all_failed_rows.extend(result['failed_rows'])
-			
+
 			batch_time = round((time.time() - batch_start) * 1000, 2)
 			batch_timings.append({
 				'batch': batch_num,
@@ -433,11 +447,14 @@ def process_import_queue(docname):
 				'successful': result['success_count'],
 				'failed': len(result['failed_rows'])
 			})
-			
-			frappe.db.set_value("Lightning Upload", docname, "successful_records", successful_records)
-			frappe.db.set_value("Lightning Upload", docname, "failed_records", failed_records)
+
+			# --- Update doc properties in memory and save once per batch ---
+			doc.successful_records = successful_records
+			doc.failed_records = failed_records
+			doc.last_processed_row = i + len(batch)
+			doc.save(ignore_permissions=True, ignore_version=True)
 			frappe.db.commit()
-			
+
 			progress_data = {
 				"status": "In Progress",
 				"progress": progress,
@@ -458,39 +475,40 @@ def process_import_queue(docname):
 				message=progress_data,
 				user=frappe.session.user,
 				after_commit=True
-			)
-		
+		)
+
 		time_taken = time.time() - start_time
 		time_str = f"{int(time_taken)}s" if time_taken < 60 else f"{time_taken/60:.1f}m"
-		
+
 		error_file_time = 0
 		if all_failed_rows:
 			error_start = time.time()
-			doc = frappe.get_doc("Lightning Upload", docname)
 			doc.error_log = json.dumps(all_failed_rows, indent=2)
-			doc.save()
+			doc.save(ignore_permissions=True, ignore_version=True)
 			doc.generate_error_file(all_failed_rows)
 			error_file_time = round((time.time() - error_start) * 1000, 2)
-		
+
 		if failed_records == total_rows:
 			final_status = "Failed"
 		elif failed_records > 0:
 			final_status = "Partial Success"
 		else:
 			final_status = "Completed"
-		
-		frappe.db.set_value("Lightning Upload", docname, "status", final_status)
-		frappe.db.set_value("Lightning Upload", docname, "import_time", time_str)
-		frappe.db.set_value("Lightning Upload", docname, "timing_details", json.dumps({
+
+		# --- Final updates on the doc object before the final save ---
+		doc.status = final_status
+		doc.import_time = time_str
+		doc.timing_details = json.dumps({
 			"total_time_seconds": round(time_taken, 2),
 			"csv_load_time_ms": csv_time,
 			"error_file_time_ms": error_file_time,
 			"batch_timings": batch_timings,
 			"average_batch_time_ms": round(sum(b['total_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0,
 			"average_insert_time_ms": round(sum(b['insert_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0
-		}, indent=2))
+		}, indent=2)
+		doc.save(ignore_permissions=True, ignore_version=True)
 		frappe.db.commit()
-		
+
 		final_progress = {
 			"status": final_status,
 			"progress": 100,
@@ -514,7 +532,7 @@ def process_import_queue(docname):
 			user=frappe.session.user,
 			after_commit=True
 		)
-		
+
 		return {
 			"status": "success",
 			"message": f"Import {final_status.lower()}. Successful: {successful_records}, Failed: {failed_records}, Time taken: {time_str}",
@@ -524,19 +542,19 @@ def process_import_queue(docname):
 			"failed_records": failed_records,
 			"timing_details": final_progress["timing_details"]
 		}
-		
+
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Error")
 		try:
-			frappe.db.set_value("Lightning Upload", docname, "status", "Failed")
-			frappe.db.set_value("Lightning Upload", docname, "error_log", str(e))
+			doc = frappe.get_doc("Lightning Upload", docname) # Re-fetch in case of an error to ensure we have the latest state
+			doc.status = "Failed"
+			doc.error_log = str(e)
+			doc.save(ignore_permissions=True, ignore_version=True)
 			frappe.db.commit()
-			
 			progress_key = f"lightning_import_{docname}"
 			error_progress = {
 				"status": "Failed",
 				"progress": 0,
-
 				"title": "Import failed",
 				"progress_key": progress_key,
 				"error": str(e)
@@ -707,23 +725,23 @@ def export_error_rows(docname):
 
 @frappe.whitelist()
 def get_csv_headers_for_upload(docname):
-    """Return the CSV headers for a given Lightning Upload docname"""
-    try:
-        doc = frappe.get_doc("Lightning Upload", docname)
-        file_doc = frappe.get_doc("File", {"file_url": doc.csv_file})
-        file_path = file_doc.get_full_path()
-        headers = get_csv_headers(file_path)
-        return {"status": "success", "headers": headers}
-    except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Lightning Import Get CSV Headers Error")
-        return {"status": "error", "message": str(e)}
+	"""Return the CSV headers for a given Lightning Upload docname"""
+	try:
+		doc = frappe.get_doc("Lightning Upload", docname)
+		file_doc = frappe.get_doc("File", {"file_url": doc.csv_file})
+		file_path = file_doc.get_full_path()
+		headers = get_csv_headers(file_path)
+		return {"status": "success", "headers": headers}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Get CSV Headers Error")
+		return {"status": "error", "message": str(e)}
 
 @frappe.whitelist()
 def save_field_mapping(docname, mapping):
-    """Save the field mapping JSON to the Lightning Upload doc"""
-    try:
-        frappe.db.set_value("Lightning Upload", docname, "field_mapping", mapping)
-        return {"status": "success"}
-    except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Lightning Import Save Field Mapping Error")
-        raise
+	"""Save the field mapping JSON to the Lightning Upload doc"""
+	try:
+		frappe.db.set_value("Lightning Upload", docname, "field_mapping", mapping)
+		return {"status": "success"}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Save Field Mapping Error")
+		raise
