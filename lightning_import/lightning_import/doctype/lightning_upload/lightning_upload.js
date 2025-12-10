@@ -51,6 +51,12 @@ frappe.ui.form.on('Lightning Upload', {
         if (frm.doc.status === 'Queued' || frm.doc.status === 'In Progress') {
             setup_progress_tracking(frm);
         }
+
+        // Also trigger the import_type logic on refresh
+        // to populate the dropdown if the form loads in the right state
+        if (frm.doc.import_type === 'Insert and Update Records' && frm.doc.csv_file) {
+            frm.events.populate_update_on_field(frm);
+        }
     },
 
     onload: function(frm) {
@@ -61,6 +67,34 @@ frappe.ui.form.on('Lightning Upload', {
         if (frm.doc.status === 'Queued' || frm.doc.status === 'In Progress') {
             setup_progress_tracking(frm);
         }
+    },
+
+    import_type: function(frm) {
+        if (frm.doc.import_type === 'Insert and Update Records') {
+            if (frm.doc.csv_file) {
+                frm.events.populate_update_on_field(frm);
+            } else {
+                frappe.msgprint(__('Please attach a CSV file first to select the update column.'));
+            }
+        }
+    },
+
+    populate_update_on_field: function(frm) {
+        // Fetch CSV headers from the backend
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+            args: { docname: frm.doc.name },
+            callback: function(r) {
+                if (r.message && r.message.status === 'success') {
+                    const headers = r.message.headers;
+                    // Prepend a blank option
+                    const options = [''].concat(headers);
+                    // Set the options for the dropdown and refresh the field
+                    frm.set_df_property('update_on_field', 'options', options);
+                    frm.refresh_field('update_on_field');
+                }
+            }
+        });
     }
 });
 

@@ -19,7 +19,8 @@
   "last_processed_row",
   "import_time",
   "timing_details",
-  "error_log"
+  "error_log",
+  "update_on_field"
  ],
  "fields": [
   {
@@ -47,7 +48,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Import Type",
-   "options": "Insert New Records\nUpdate Existing Records",
+   "options": "Insert New Records\nUpdate Existing Records\nInsert and Update Records",
    "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\"",
    "reqd": 1
   },
@@ -59,13 +60,13 @@
    "reqd": 1
   },
   {
+   "description": "Mapping between CSV columns and DocType fields (JSON)",
    "fieldname": "field_mapping",
    "fieldtype": "Code",
+   "hidden": 1,
    "label": "Field Mapping",
-   "description": "Mapping between CSV columns and DocType fields (JSON)",
    "no_copy": 1,
-   "read_only": 1,
-   "hidden": 1
+   "read_only": 1
   },
   {
    "fieldname": "total_data",
@@ -131,12 +132,19 @@
    "label": "Error Log",
    "no_copy": 1,
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.import_type == \"Insert and Update Records\"",
+   "description": "Select the unique field (like Email, Mobile No, etc.) to check if a record already exists.",
+   "fieldname": "update_on_field",
+   "fieldtype": "Select",
+   "label": "Validate On CSV Column"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-06-10 17:57:04.016267",
+ "modified": "2025-07-30 19:28:17.674184",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",
