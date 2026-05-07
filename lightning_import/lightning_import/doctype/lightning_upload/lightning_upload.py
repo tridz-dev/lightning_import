@@ -724,11 +724,21 @@ def export_error_rows(docname):
 		}
 
 @frappe.whitelist()
-def get_csv_headers_for_upload(docname):
-	"""Return the CSV headers for a given Lightning Upload docname"""
+def get_csv_headers_for_upload(docname=None, file_url=None):
+	"""Return the CSV headers for a given Lightning Upload docname or file_url"""
 	try:
-		doc = frappe.get_doc("Lightning Upload", docname)
-		file_doc = frappe.get_doc("File", {"file_url": doc.csv_file})
+		if not file_url and docname:
+			# Fallback to fetching via docname if file_url not provided
+			if frappe.db.exists("Lightning Upload", docname):
+				doc = frappe.get_doc("Lightning Upload", docname)
+				file_url = doc.csv_file
+			else:
+				return {"status": "error", "message": f"Lightning Upload {docname} not found"}
+		
+		if not file_url:
+			return {"status": "error", "message": "No CSV file attached"}
+
+		file_doc = frappe.get_doc("File", {"file_url": file_url})
 		file_path = file_doc.get_full_path()
 		headers = get_csv_headers(file_path)
 		return {"status": "success", "headers": headers}
@@ -751,51 +761,28 @@ def check_file_duplicates(docname, mapping=None):
 	"""
 	Pre-import duplicate check.
 
-	Reads the 'lightning_import_duplicate_check_fields' hook to find out which
-	doctype fields to check (e.g. ['mobile_no']). Then finds which CSV columns
-	map to those fields, and scans the file for duplicate values in those columns only.
-
-	Consuming apps declare the fields to check in their hooks.py, e.g.:
-	    lightning_import_duplicate_check_fields = ["mobile_no", "email"]
+	Checks if 'enable_file_duplicate_check' is on in Settings.
+	If so, it scans the specific CSV column selected in 'duplicate_check_field'
+	on the Lightning Upload document.
 	"""
 	try:
+		# Check if feature is enabled in Settings
+		settings = frappe.get_single("Lightning Upload Settings")
+		if not settings.get("enable_file_duplicate_check"):
+			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
+
 		doc = frappe.get_doc("Lightning Upload", docname)
 
-		# Save mapping if provided (same as start_import does)
+		# If no column was selected, skip check
+		if not doc.get("duplicate_check_field"):
+			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
+
+		csv_col_to_check = doc.duplicate_check_field
+
+		# Save mapping if provided
 		if mapping:
 			frappe.db.set_value("Lightning Upload", docname, "field_mapping", mapping)
 			doc.field_mapping = mapping
-
-		if not doc.field_mapping:
-			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
-
-		# Collect the fields declared by consuming apps via the hook
-		fields_to_check = set()
-		for field_list in frappe.get_hooks("lightning_import_duplicate_check_fields"):
-			if isinstance(field_list, list):
-				fields_to_check.update(field_list)
-			elif isinstance(field_list, str):
-				fields_to_check.add(field_list)
-
-		if not fields_to_check:
-			# No app has declared any fields to check — skip
-			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
-
-		field_mapping = json.loads(doc.field_mapping)
-
-		# Build a map: doctype_field -> csv_column (reverse of field_mapping)
-		doctype_to_csv = {v: k for k, v in field_mapping.items() if v}
-
-		# Only check columns whose doctype field is declared in the hook
-		cols_to_check = {
-			doctype_field: doctype_to_csv[doctype_field]
-			for doctype_field in fields_to_check
-			if doctype_field in doctype_to_csv
-		}
-
-		if not cols_to_check:
-			# Declared fields are not mapped in this import — nothing to check
-			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
 
 		raw_rows = doc.get_csv_data()
 		total_rows = len(raw_rows)
@@ -806,31 +793,36 @@ def check_file_duplicates(docname, mapping=None):
 		duplicates = []
 		duplicate_row_numbers = set()
 
-		for doctype_field, csv_col in cols_to_check.items():
-			# Group 1-based row numbers by cell value
-			value_to_rows = {}
-			for idx, row in enumerate(raw_rows, start=1):
-				val = str(row.get(csv_col, "") or "").strip()
-				if val == "":
-					continue  # skip blank cells
-				value_to_rows.setdefault(val, []).append(idx)
+		# Group 1-based row numbers by cell value
+		value_to_rows = {}
+		for idx, row in enumerate(raw_rows, start=1):
+			val = str(row.get(csv_col_to_check, "") or "").strip()
+			if val == "":
+				continue  # skip blank cells
+			value_to_rows.setdefault(val, []).append(idx)
 
-			dup_entries = [
-				{"value": val, "rows": idxs, "count": len(idxs)}
-				for val, idxs in value_to_rows.items()
-				if len(idxs) > 1
-			]
+		dup_entries = [
+			{"value": val, "rows": idxs, "count": len(idxs)}
+			for val, idxs in value_to_rows.items()
+			if len(idxs) > 1
+		]
 
-			if dup_entries:
-				for entry in dup_entries:
-					duplicate_row_numbers.update(entry["rows"])
+		if dup_entries:
+			for entry in dup_entries:
+				duplicate_row_numbers.update(entry["rows"])
 
-				duplicates.append({
-					"field": doctype_field,
-					"csv_column": csv_col,
-					"duplicate_values": dup_entries,
-					"count": len(dup_entries)
-				})
+			# Try to find the doctype field this maps to (for display)
+			doctype_field = csv_col_to_check
+			if doc.field_mapping:
+				field_mapping = json.loads(doc.field_mapping)
+				doctype_field = field_mapping.get(csv_col_to_check) or csv_col_to_check
+
+			duplicates.append({
+				"field": doctype_field,
+				"csv_column": csv_col_to_check,
+				"duplicate_values": dup_entries,
+				"count": len(dup_entries)
+			})
 
 		return {
 			"status": "success",

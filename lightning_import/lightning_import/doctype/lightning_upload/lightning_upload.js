@@ -57,6 +57,18 @@ frappe.ui.form.on('Lightning Upload', {
         if (frm.doc.import_type === 'Insert and Update Records' && frm.doc.csv_file) {
             frm.events.populate_update_on_field(frm);
         }
+
+        // Manage Duplicate Check field visibility and options
+        frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
+            if (enabled) {
+                frm.set_df_property('duplicate_check_field', 'hidden', 0);
+                if (frm.doc.csv_file) {
+                    frm.events.populate_duplicate_check_field(frm);
+                }
+            } else {
+                frm.set_df_property('duplicate_check_field', 'hidden', 1);
+            }
+        });
     },
 
     onload: function(frm) {
@@ -69,6 +81,20 @@ frappe.ui.form.on('Lightning Upload', {
         }
     },
 
+    csv_file: function(frm) {
+        if (frm.doc.import_type === 'Insert and Update Records') {
+            if (frm.doc.csv_file) {
+                frm.events.populate_update_on_field(frm);
+            }
+        }
+        
+        frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
+            if (enabled && frm.doc.csv_file) {
+                frm.events.populate_duplicate_check_field(frm);
+            }
+        });
+    },
+
     import_type: function(frm) {
         if (frm.doc.import_type === 'Insert and Update Records') {
             if (frm.doc.csv_file) {
@@ -79,11 +105,26 @@ frappe.ui.form.on('Lightning Upload', {
         }
     },
 
+    populate_duplicate_check_field: function(frm) {
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+            args: { file_url: frm.doc.csv_file },
+            callback: function(r) {
+                if (r.message && r.message.status === 'success') {
+                    const headers = r.message.headers;
+                    const options = [''].concat(headers);
+                    frm.set_df_property('duplicate_check_field', 'options', options);
+                    frm.refresh_field('duplicate_check_field');
+                }
+            }
+        });
+    },
+
     populate_update_on_field: function(frm) {
         // Fetch CSV headers from the backend
         frappe.call({
             method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-            args: { docname: frm.doc.name },
+            args: { file_url: frm.doc.csv_file },
             callback: function(r) {
                 if (r.message && r.message.status === 'success') {
                     const headers = r.message.headers;
@@ -469,7 +510,7 @@ function export_error_rows(frm) {
 function open_field_mapping_dialog(frm) {
     frappe.call({
         method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-        args: { docname: frm.doc.name },
+        args: { file_url: frm.doc.csv_file },
         callback: function(csvRes) {
             if (!csvRes.message || csvRes.message.status !== 'success') {
                 frappe.show_alert({ message: csvRes.message ? csvRes.message.message : __('Failed to fetch CSV headers'), indicator: 'red' });

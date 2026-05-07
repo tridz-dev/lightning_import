@@ -20,7 +20,8 @@
   "import_time",
   "timing_details",
   "error_log",
-  "update_on_field"
+  "update_on_field",
+  "duplicate_check_field"
  ],
  "fields": [
   {
@@ -139,12 +140,19 @@
    "fieldname": "update_on_field",
    "fieldtype": "Select",
    "label": "Validate On CSV Column"
+  },
+  {
+   "description": "Select the CSV column to check for duplicates within the file.",
+   "fieldname": "duplicate_check_field",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Check Duplicates in Column"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-07-30 19:28:17.674184",
+ "modified": "2026-05-07 19:10:24.449237",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",
