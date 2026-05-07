@@ -243,5 +243,6 @@ app_license = "mit"
 # }
 
 custom_hooks=[
-    "lightning_import_validate_row"
+    "lightning_import_validate_row",
+    "lightning_import_duplicate_check_fields"
 ]
