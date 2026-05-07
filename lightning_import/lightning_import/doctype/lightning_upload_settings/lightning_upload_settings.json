@@ -6,7 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "batch_size",
-  "validate_from_hook"
+  "validate_from_hook",
+  "enable_file_duplicate_check"
  ],
  "fields": [
   {
@@ -23,13 +24,19 @@
    "fieldname": "validate_from_hook",
    "fieldtype": "Check",
    "label": "Validate from Hook?"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_file_duplicate_check",
+   "fieldtype": "Check",
+   "label": "Enable File Duplicate Check"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-06-09 17:34:38.809594",
+ "modified": "2026-05-07 19:10:24.149957",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload Settings",

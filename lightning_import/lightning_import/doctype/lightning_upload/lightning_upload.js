@@ -57,6 +57,18 @@ frappe.ui.form.on('Lightning Upload', {
         if (frm.doc.import_type === 'Insert and Update Records' && frm.doc.csv_file) {
             frm.events.populate_update_on_field(frm);
         }
+
+        // Manage Duplicate Check field visibility and options
+        frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
+            if (enabled) {
+                frm.set_df_property('duplicate_check_field', 'hidden', 0);
+                if (frm.doc.csv_file) {
+                    frm.events.populate_duplicate_check_field(frm);
+                }
+            } else {
+                frm.set_df_property('duplicate_check_field', 'hidden', 1);
+            }
+        });
     },
 
     onload: function(frm) {
@@ -69,6 +81,20 @@ frappe.ui.form.on('Lightning Upload', {
         }
     },
 
+    csv_file: function(frm) {
+        if (frm.doc.import_type === 'Insert and Update Records') {
+            if (frm.doc.csv_file) {
+                frm.events.populate_update_on_field(frm);
+            }
+        }
+        
+        frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
+            if (enabled && frm.doc.csv_file) {
+                frm.events.populate_duplicate_check_field(frm);
+            }
+        });
+    },
+
     import_type: function(frm) {
         if (frm.doc.import_type === 'Insert and Update Records') {
             if (frm.doc.csv_file) {
@@ -79,11 +105,26 @@ frappe.ui.form.on('Lightning Upload', {
         }
     },
 
+    populate_duplicate_check_field: function(frm) {
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+            args: { file_url: frm.doc.csv_file },
+            callback: function(r) {
+                if (r.message && r.message.status === 'success') {
+                    const headers = r.message.headers;
+                    const options = [''].concat(headers);
+                    frm.set_df_property('duplicate_check_field', 'options', options);
+                    frm.refresh_field('duplicate_check_field');
+                }
+            }
+        });
+    },
+
     populate_update_on_field: function(frm) {
         // Fetch CSV headers from the backend
         frappe.call({
             method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-            args: { docname: frm.doc.name },
+            args: { file_url: frm.doc.csv_file },
             callback: function(r) {
                 if (r.message && r.message.status === 'success') {
                     const headers = r.message.headers;
@@ -304,12 +345,104 @@ function start_import(frm) {
         });
     };
 
+    // Show duplicate warning dialog then proceed or cancel
+    const check_and_proceed = (mapping_json = null) => {
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.check_file_duplicates',
+            args: {
+                docname: frm.doc.name,
+                mapping: mapping_json
+            },
+            freeze: true,
+            freeze_message: __('Checking for duplicates in file...'),
+            callback: function(r) {
+                if (!r.message || r.message.status === 'error') {
+                    // If duplicate check itself fails, still allow continuing
+                    console.warn('[Lightning Import] Duplicate check failed:', r.message && r.message.message);
+                    call_start_import_py(mapping_json);
+                    return;
+                }
+
+                const result = r.message;
+                if (!result.has_duplicates) {
+                    // No duplicates — proceed directly
+                    call_start_import_py(mapping_json);
+                    return;
+                }
+
+                // Build an HTML summary table for duplicates
+                let html = `
+                    <div style="margin-bottom:12px;">
+                        <span style="font-size:15px;font-weight:600;color:#e2622a;">
+                            &#9888; ${result.total_duplicate_rows} row(s) contain duplicate values across ${result.duplicates.length} column(s).
+                        </span>
+                        <div style="color:#666;margin-top:4px;font-size:12px;">
+                            Total rows in file: <b>${result.total_rows}</b>
+                        </div>
+                    </div>
+                `;
+
+                result.duplicates.forEach(col => {
+                    html += `
+                        <div style="margin-bottom:14px;border:1px solid #f0c080;border-radius:6px;padding:10px 14px;background:#fffbf0;">
+                            <div style="font-weight:600;color:#b36b00;margin-bottom:6px;">
+                                Column: <span style="color:#333">${frappe.utils.escape_html(col.csv_column)}</span>
+                                <span style="font-size:11px;color:#888;margin-left:8px;">(maps to: ${frappe.utils.escape_html(col.field)})</span>
+                            </div>
+                            <table class="table table-condensed table-bordered" style="font-size:12px;margin-bottom:0;background:#fff;">
+                                <thead><tr>
+                                    <th>Duplicate Value</th>
+                                    <th>Occurrences</th>
+                                    <th>Row Numbers</th>
+                                </tr></thead>
+                                <tbody>
+                    `;
+                    col.duplicate_values.forEach(entry => {
+                        // Show at most 20 row numbers to keep the dialog compact
+                        const rowDisplay = entry.rows.length > 20
+                            ? entry.rows.slice(0, 20).join(', ') + `... (+${entry.rows.length - 20} more)`
+                            : entry.rows.join(', ');
+                        html += `
+                            <tr>
+                                <td><b>${frappe.utils.escape_html(String(entry.value))}</b></td>
+                                <td style="text-align:center">${entry.count}</td>
+                                <td style="color:#555">${rowDisplay}</td>
+                            </tr>
+                        `;
+                    });
+                    html += `</tbody></table></div>`;
+                });
+
+                html += `<div style="margin-top:10px;color:#555;font-size:12px;">
+                    You can still continue with the import. Duplicate rows will be processed normally — no rows are skipped automatically.
+                </div>`;
+
+                const d = new frappe.ui.Dialog({
+                    title: __('Duplicate Values Detected in File'),
+                    fields: [{ fieldtype: 'HTML', fieldname: 'dup_summary', options: html }],
+                    primary_action_label: __('Continue Import'),
+                    primary_action() {
+                        d.hide();
+                        call_start_import_py(mapping_json);
+                    },
+                    secondary_action_label: __('Cancel'),
+                    secondary_action() {
+                        d.hide();
+                    }
+                });
+                d.show();
+                // Make the dialog wider for readability
+                d.$wrapper.find('.modal-dialog').css('max-width', '750px');
+            }
+        });
+    };
+
     // Main logic starts here
     if (frm.doc.field_mapping) {
-        // If a mapping is already saved, proceed directly.
-        call_start_import_py();
+        // If a mapping is already saved, run duplicate check then proceed.
+        check_and_proceed();
     } else {
-        // If no mapping exists, perform auto-mapping and validation.
+        // If no mapping exists, perform auto-mapping and validation first.
         frappe.call({
             method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_and_validate',
             args: { docname: frm.doc.name },
@@ -319,13 +452,19 @@ function start_import(frm) {
                     return;
                 }
                 const data = r.message;
+                const mapping_json = JSON.stringify(data.mapping);
+
+                const proceed_with_dup_check = () => {
+                    check_and_proceed(mapping_json);
+                };
+
                 if (data.unmapped_required.length > 0) {
-                    // If required fields are missing, ask the user what to do.
+                    // If required fields are missing, ask the user what to do first.
                     frappe.confirm(
                         __('The following required fields could not be auto-mapped: <br><b>{0}</b>. <br><br>Rows without these fields will fail to import. Do you want to continue anyway?', [data.unmapped_required.join(', ')]),
                         () => {
-                            // User chose to "Continue Anyway"
-                            call_start_import_py(JSON.stringify(data.mapping));
+                            // User chose to "Continue Anyway" — still run dup check
+                            proceed_with_dup_check();
                         },
                         () => {
                             // User chose to "Cancel and Map Fields"
@@ -336,12 +475,12 @@ function start_import(frm) {
                         __('Cancel and Map Fields')
                     );
                 } else {
-                    // If all required fields were auto-mapped, start the import.
+                    // All required fields mapped — run dup check before import
                     frappe.show_alert({
-                        message: __('All required fields were auto-mapped. Starting import...'),
+                        message: __('All required fields were auto-mapped. Checking for duplicates...'),
                         indicator: 'green'
                     });
-                    call_start_import_py(JSON.stringify(data.mapping));
+                    proceed_with_dup_check();
                 }
             }
         });
@@ -371,7 +510,7 @@ function export_error_rows(frm) {
 function open_field_mapping_dialog(frm) {
     frappe.call({
         method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-        args: { docname: frm.doc.name },
+        args: { file_url: frm.doc.csv_file },
         callback: function(csvRes) {
             if (!csvRes.message || csvRes.message.status !== 'success') {
                 frappe.show_alert({ message: csvRes.message ? csvRes.message.message : __('Failed to fetch CSV headers'), indicator: 'red' });

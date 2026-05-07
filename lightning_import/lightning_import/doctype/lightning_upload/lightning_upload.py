@@ -724,11 +724,21 @@ def export_error_rows(docname):
 		}
 
 @frappe.whitelist()
-def get_csv_headers_for_upload(docname):
-	"""Return the CSV headers for a given Lightning Upload docname"""
+def get_csv_headers_for_upload(docname=None, file_url=None):
+	"""Return the CSV headers for a given Lightning Upload docname or file_url"""
 	try:
-		doc = frappe.get_doc("Lightning Upload", docname)
-		file_doc = frappe.get_doc("File", {"file_url": doc.csv_file})
+		if not file_url and docname:
+			# Fallback to fetching via docname if file_url not provided
+			if frappe.db.exists("Lightning Upload", docname):
+				doc = frappe.get_doc("Lightning Upload", docname)
+				file_url = doc.csv_file
+			else:
+				return {"status": "error", "message": f"Lightning Upload {docname} not found"}
+		
+		if not file_url:
+			return {"status": "error", "message": "No CSV file attached"}
+
+		file_doc = frappe.get_doc("File", {"file_url": file_url})
 		file_path = file_doc.get_full_path()
 		headers = get_csv_headers(file_path)
 		return {"status": "success", "headers": headers}
@@ -745,3 +755,83 @@ def save_field_mapping(docname, mapping):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Save Field Mapping Error")
 		raise
+
+@frappe.whitelist()
+def check_file_duplicates(docname, mapping=None):
+	"""
+	Pre-import duplicate check.
+
+	Checks if 'enable_file_duplicate_check' is on in Settings.
+	If so, it scans the specific CSV column selected in 'duplicate_check_field'
+	on the Lightning Upload document.
+	"""
+	try:
+		# Check if feature is enabled in Settings
+		settings = frappe.get_single("Lightning Upload Settings")
+		if not settings.get("enable_file_duplicate_check"):
+			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
+
+		doc = frappe.get_doc("Lightning Upload", docname)
+
+		# If no column was selected, skip check
+		if not doc.get("duplicate_check_field"):
+			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
+
+		csv_col_to_check = doc.duplicate_check_field
+
+		# Save mapping if provided
+		if mapping:
+			frappe.db.set_value("Lightning Upload", docname, "field_mapping", mapping)
+			doc.field_mapping = mapping
+
+		raw_rows = doc.get_csv_data()
+		total_rows = len(raw_rows)
+
+		if not raw_rows:
+			return {"status": "success", "has_duplicates": False, "duplicates": [], "total_duplicate_rows": 0}
+
+		duplicates = []
+		duplicate_row_numbers = set()
+
+		# Group 1-based row numbers by cell value
+		value_to_rows = {}
+		for idx, row in enumerate(raw_rows, start=1):
+			val = str(row.get(csv_col_to_check, "") or "").strip()
+			if val == "":
+				continue  # skip blank cells
+			value_to_rows.setdefault(val, []).append(idx)
+
+		dup_entries = [
+			{"value": val, "rows": idxs, "count": len(idxs)}
+			for val, idxs in value_to_rows.items()
+			if len(idxs) > 1
+		]
+
+		if dup_entries:
+			for entry in dup_entries:
+				duplicate_row_numbers.update(entry["rows"])
+
+			# Try to find the doctype field this maps to (for display)
+			doctype_field = csv_col_to_check
+			if doc.field_mapping:
+				field_mapping = json.loads(doc.field_mapping)
+				doctype_field = field_mapping.get(csv_col_to_check) or csv_col_to_check
+
+			duplicates.append({
+				"field": doctype_field,
+				"csv_column": csv_col_to_check,
+				"duplicate_values": dup_entries,
+				"count": len(dup_entries)
+			})
+
+		return {
+			"status": "success",
+			"has_duplicates": len(duplicates) > 0,
+			"duplicates": duplicates,
+			"total_duplicate_rows": len(duplicate_row_numbers),
+			"total_rows": total_rows
+		}
+
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Duplicate Check Error")
+		return {"status": "error", "message": str(e)}
