@@ -573,6 +573,19 @@ def process_import_queue(docname):
 			"message": str(e)
 		}
 
+def normalize_column(value):
+	if not value:
+		return ""
+
+	return (
+		str(value)
+		.strip()
+		.lower()
+		.replace(" ", "")
+		.replace("_", "")
+		.replace("-", "")
+	)
+
 @frappe.whitelist()
 def auto_map_and_validate(docname):
 	"""
@@ -591,23 +604,59 @@ def auto_map_and_validate(docname):
 	
 	detailed_fields = get_detailed_doctype_fields(doc.import_doctype)
 
+	mapping_docs = frappe.get_all(
+		"Lightning Field Mapping",
+		filters={
+			"reference_doctype": doc.import_doctype
+		},
+		fields=["name"]
+	)
+
+	alias_map = {}
+
+	for mapping_doc in mapping_docs:
+		mapping = frappe.get_doc(
+			"Lightning Field Mapping",
+			mapping_doc.name
+		)
+
+		for row in mapping.mappings:
+			if row.alternate_name and row.field_name:
+				alias_map[
+					normalize_column(row.alternate_name)
+				] = row.field_name
+	
+	frappe.logger().info(f"Alias Map loaded: {alias_map}")
+
 	normalized_field_map = {}
-	def normalize(s):
+	def normalize_legacy(s):
 		return s.lower().replace("_", " ").replace("-", " ")
 
 	for f in detailed_fields:
 		if f.get('fieldname'):
-			normalized_field_map[normalize(f.get('fieldname'))] = f.get('fieldname')
+			normalized_field_map[normalize_legacy(f.get('fieldname'))] = f.get('fieldname')
 		if f.get('label'):
-			normalized_field_map[normalize(f.get('label'))] = f.get('fieldname')
+			normalized_field_map[normalize_legacy(f.get('label'))] = f.get('fieldname')
 	
 	normalized_field_map['id'] = 'name'
 	normalized_field_map['name'] = 'first_name'
 
 	auto_mapping = {}
 	for header in csv_headers:
-		normalized_header = normalize(header)
-		auto_mapping[header] = normalized_field_map.get(normalized_header, "")
+		# Step 1: Exact fieldname or label match (Legacy)
+		header_norm_legacy = normalize_legacy(header)
+		mapped_field = normalized_field_map.get(header_norm_legacy, "")
+
+		# Step 2: Alias match (runs AFTER existing matches)
+		header_norm_column = normalize_column(header)
+		frappe.logger().info(f"Processing header: '{header}' | Legacy Norm: '{header_norm_legacy}' | Column Norm: '{header_norm_column}'")
+		
+		if not mapped_field:
+			mapped_field = alias_map.get(header_norm_column)
+			if mapped_field:
+				frappe.logger().info(f"Matched alias for '{header}': {mapped_field}")
+
+		auto_mapping[header] = mapped_field or ""
 
 	mapped_fields = [v for v in auto_mapping.values() if v]
 	unmapped_required = [f for f in required_fields if f not in mapped_fields]

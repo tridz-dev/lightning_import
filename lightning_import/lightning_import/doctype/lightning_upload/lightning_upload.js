@@ -20,10 +20,10 @@ frappe.realtime.on('socket_disconnected', () => {
 });
 
 frappe.ui.form.on('Lightning Upload', {
-    refresh: function(frm) {
+    refresh: function (frm) {
         // Store reference to current form
         frappe.progress_state.current_form = frm;
-        
+
         // Show Start Import button only when status is Draft and document is saved
         if (!frm.is_new() && frm.doc.status === "Draft") {
             frm.page.set_primary_action(__('Start Import'), () => {
@@ -71,23 +71,23 @@ frappe.ui.form.on('Lightning Upload', {
         });
     },
 
-    onload: function(frm) {
+    onload: function (frm) {
         // Store reference to current form
         frappe.progress_state.current_form = frm;
-        
+
         // Set up progress tracking when form loads if import is in progress
         if (frm.doc.status === 'Queued' || frm.doc.status === 'In Progress') {
             setup_progress_tracking(frm);
         }
     },
 
-    csv_file: function(frm) {
+    csv_file: function (frm) {
         if (frm.doc.import_type === 'Insert and Update Records') {
             if (frm.doc.csv_file) {
                 frm.events.populate_update_on_field(frm);
             }
         }
-        
+
         frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
             if (enabled && frm.doc.csv_file) {
                 frm.events.populate_duplicate_check_field(frm);
@@ -95,7 +95,7 @@ frappe.ui.form.on('Lightning Upload', {
         });
     },
 
-    import_type: function(frm) {
+    import_type: function (frm) {
         if (frm.doc.import_type === 'Insert and Update Records') {
             if (frm.doc.csv_file) {
                 frm.events.populate_update_on_field(frm);
@@ -105,11 +105,11 @@ frappe.ui.form.on('Lightning Upload', {
         }
     },
 
-    populate_duplicate_check_field: function(frm) {
+    populate_duplicate_check_field: function (frm) {
         frappe.call({
             method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
             args: { file_url: frm.doc.csv_file },
-            callback: function(r) {
+            callback: function (r) {
                 if (r.message && r.message.status === 'success') {
                     const headers = r.message.headers;
                     const options = [''].concat(headers);
@@ -120,12 +120,12 @@ frappe.ui.form.on('Lightning Upload', {
         });
     },
 
-    populate_update_on_field: function(frm) {
+    populate_update_on_field: function (frm) {
         // Fetch CSV headers from the backend
         frappe.call({
             method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
             args: { file_url: frm.doc.csv_file },
-            callback: function(r) {
+            callback: function (r) {
                 if (r.message && r.message.status === 'success') {
                     const headers = r.message.headers;
                     // Prepend a blank option
@@ -140,9 +140,9 @@ frappe.ui.form.on('Lightning Upload', {
 });
 
 // Global event handler for import progress
-frappe.realtime.on('import_progress', function(data) {
+frappe.realtime.on('import_progress', function (data) {
     console.log('[Lightning Import] Received import_progress event:', data);
-    
+
     const frm = frappe.progress_state.current_form;
     if (!frm) {
         console.log('[Lightning Import] No form found in progress_state');
@@ -169,7 +169,7 @@ frappe.realtime.on('import_progress', function(data) {
 
 function setup_progress_tracking(frm) {
     console.log('[Lightning Import] Setting up progress tracking for form:', frm.doc.name);
-    
+
     // Clear any existing progress bar
     if (frm.progress_bar) {
         console.log('[Lightning Import] Removing existing progress bar');
@@ -196,12 +196,12 @@ function update_progress(frm, data) {
         data: data,
         hasProgressBar: !!frm.progress_bar
     });
-    
+
     if (!data || !frm.progress_bar) {
         console.log('[Lightning Import] Missing data or progress bar, skipping update');
         return;
     }
-    
+
     // Update progress bar
     console.log('[Lightning Import] Updating progress bar to:', data.progress + '%');
     frm.progress_bar.find('.progress-bar')
@@ -275,20 +275,20 @@ function update_progress(frm, data) {
             frm.progress_bar.remove();
             frm.progress_bar = null;
         }
-        
+
         // Update buttons based on status
         if (data.status === 'Failed' || data.status === 'Partial Success') {
             // Check if the Export Error Rows button already exists
-            const hasExportButton = frm.page.custom_buttons && 
+            const hasExportButton = frm.page.custom_buttons &&
                 frm.page.custom_buttons.some(btn => btn.label === __('Export Error Rows'));
-            
+
             if (!hasExportButton) {
                 frm.add_custom_button(__('Export Error Rows'), () => {
                     export_error_rows(frm);
                 });
             }
         }
-        
+
         // Refresh primary action button
         if (data.status === 'Draft') {
             frm.page.set_primary_action(__('Start Import'), () => {
@@ -325,7 +325,7 @@ function start_import(frm) {
                 docname: frm.doc.name,
                 mapping: mapping_json
             },
-            callback: function(r) {
+            callback: function (r) {
                 if (r.message && r.message.status === 'success') {
                     frappe.show_alert({
                         message: r.message.message,
@@ -355,7 +355,7 @@ function start_import(frm) {
             },
             freeze: true,
             freeze_message: __('Checking for duplicates in file...'),
-            callback: function(r) {
+            callback: function (r) {
                 if (!r.message || r.message.status === 'error') {
                     // If duplicate check itself fails, still allow continuing
                     console.warn('[Lightning Import] Duplicate check failed:', r.message && r.message.message);
@@ -446,7 +446,7 @@ function start_import(frm) {
         frappe.call({
             method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_and_validate',
             args: { docname: frm.doc.name },
-            callback: function(r) {
+            callback: function (r) {
                 if (!r.message) {
                     frappe.msgprint(__('Error during auto-mapping. Please map fields manually.'));
                     return;
@@ -493,7 +493,7 @@ function export_error_rows(frm) {
         args: {
             docname: frm.doc.name
         },
-        callback: function(r) {
+        callback: function (r) {
             if (r.message && r.message.status === 'success') {
                 window.open(r.message.file_url, '_blank');
             } else {
@@ -511,7 +511,7 @@ function open_field_mapping_dialog(frm) {
     frappe.call({
         method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
         args: { file_url: frm.doc.csv_file },
-        callback: function(csvRes) {
+        callback: function (csvRes) {
             if (!csvRes.message || csvRes.message.status !== 'success') {
                 frappe.show_alert({ message: csvRes.message ? csvRes.message.message : __('Failed to fetch CSV headers'), indicator: 'red' });
                 return;
@@ -526,51 +526,38 @@ function open_field_mapping_dialog(frm) {
                         frappe.show_alert({ message: __('Failed to fetch DocType fields'), indicator: 'red' });
                         return;
                     }
-            
+
                     const fieldOptions = dtRes.message.fields || [];
-                    
-                    const normalize = str => (typeof str === 'string' ? str.toLowerCase().replace(/[\s_]+/g, '') : '');
-            
-                    const normalizedFieldMap = {};
-                    fieldOptions.forEach(f => {
-                        if (f.fieldname) {
-                            normalizedFieldMap[normalize(f.fieldname)] = f.fieldname;
-                            if (f.label) {
-                                normalizedFieldMap[normalize(f.label)] = f.fieldname;
-                            }
-                        }
-                    });
-                    normalizedFieldMap['id'] = 'name';
-                    normalizedFieldMap['name'] = 'first_name'
-            
-                    frappe.model.with_doctype(frm.doc.import_doctype, () => {
+
+                    frappe.model.with_doctype(frm.doc.import_doctype, async () => {
                         const meta = frappe.get_meta(frm.doc.import_doctype);
                         const requiredFields = meta.fields.filter(f => f.reqd).map(f => f.fieldname);
-            
+
                         let existingMapping = {};
                         try {
                             if (frm.doc.field_mapping) {
                                 existingMapping = JSON.parse(frm.doc.field_mapping);
                             }
-                        } catch (e) { 
+                        } catch (e) {
                             console.log('Error parsing existing mapping:', e);
                         }
-            
+
+                        // Fetch auto-mapping from backend (including aliases)
+                        const auto_mapping_res = await frappe.xcall('lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_and_validate', { docname: frm.doc.name });
+                        const backend_mapping = auto_mapping_res ? auto_mapping_res.mapping : {};
+
                         const mapping = {};
                         csvHeaders.forEach(header => {
-                            const normalizedHeader = normalize(header);
                             if (existingMapping[header]) {
                                 mapping[header] = existingMapping[header];
-                            } else if (normalizedFieldMap[normalizedHeader]) {
-                                mapping[header] = normalizedFieldMap[normalizedHeader];
                             } else {
-                                mapping[header] = '';
+                                mapping[header] = backend_mapping[header] || '';
                             }
                         });
-            
+
                         let tableHtml = `<div style="margin-bottom:16px"><b>Map columns from <span style='color:#007bff'>${frappe.utils.escape_html(frm.doc.csv_file.split('/').pop())}</span> to fields in <span style='color:#007bff'>${frappe.utils.escape_html(frm.doc.import_doctype)}</span></b></div>`;
                         tableHtml += `<table class="table table-bordered" style="width:100%;background:#fff"><thead><tr><th style='width:50%'>CSV Column</th><th style='width:50%'>DocType Field</th></tr></thead><tbody>`;
-            
+
                         csvHeaders.forEach(header => {
                             tableHtml += `<tr><td><input type='text' class='form-control' value='${frappe.utils.escape_html(header)}' readonly tabindex='-1'></td>`;
                             tableHtml += `<td><select class='form-control field-mapping-select' data-header="${frappe.utils.escape_html(header)}">`;
@@ -585,9 +572,9 @@ function open_field_mapping_dialog(frm) {
                             });
                             tableHtml += `</select></td></tr>`;
                         });
-            
+
                         tableHtml += `</tbody></table>`;
-            
+
                         const d = new frappe.ui.Dialog({
                             title: __('Map Columns'),
                             fields: [
@@ -602,20 +589,20 @@ function open_field_mapping_dialog(frm) {
 
                                     values[header] = value;
                                 });
-            
+
                                 const mappedFields = Object.values(values).filter(Boolean);
                                 const unmappedRequired = requiredFields.filter(f => !mappedFields.includes(f));
                                 if (unmappedRequired.length) {
                                     frappe.msgprint(__('Please map all required fields: {0}', [unmappedRequired.join(', ')]));
                                     return;
                                 }
-            
+
                                 const duplicates = mappedFields.filter((item, idx) => mappedFields.indexOf(item) !== idx);
                                 if (duplicates.length) {
                                     frappe.msgprint(__('Duplicate mapping for: {0}', [duplicates.join(', ')]));
                                     return;
                                 }
-            
+
                                 frappe.call({
                                     method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.save_field_mapping',
                                     args: {
@@ -625,7 +612,7 @@ function open_field_mapping_dialog(frm) {
                                     callback: function (res) {
                                         if (res.message && res.message.status === 'success') {
                                             d.hide();
-                                            frm.reload_doc(); 
+                                            frm.reload_doc();
                                             frappe.show_alert({ message: __('Field mapping saved.'), indicator: 'green' });
                                         } else {
                                             frappe.show_alert({ message: res.message?.message || __('Failed to save mapping'), indicator: 'red' });
@@ -634,7 +621,7 @@ function open_field_mapping_dialog(frm) {
                                 });
                             }
                         });
-            
+
                         d.show();
                     });
                 }
