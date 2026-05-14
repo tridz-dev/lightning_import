@@ -376,8 +376,7 @@ def process_import_queue(docname):
 		doc = frappe.get_doc("Lightning Upload", docname)
 
 		# Update initial status and total records
-		doc.status = "In Progress"
-		doc.save(ignore_permissions=True, ignore_version=True)
+		frappe.db.set_value("Lightning Upload", docname, "status", "In Progress")
 		frappe.db.commit()
 
 		progress_key = f"lightning_import_{docname}"
@@ -398,9 +397,8 @@ def process_import_queue(docname):
 		csv_data = doc.get_mapped_data()
 		csv_time = round((time.time() - csv_start) * 1000, 2)
 		total_rows = len(csv_data)
-		# Update total records on the doc object
-		doc.total_records = total_rows
-		doc.save(ignore_permissions=True, ignore_version=True)
+		# Update total records
+		frappe.db.set_value("Lightning Upload", docname, "total_records", total_rows)
 		frappe.db.commit()
 		frappe.publish_realtime(
 			event='import_progress',
@@ -448,11 +446,17 @@ def process_import_queue(docname):
 				'failed': len(result['failed_rows'])
 			})
 
-			# --- Update doc properties in memory and save once per batch ---
-			doc.successful_records = successful_records
-			doc.failed_records = failed_records
-			doc.last_processed_row = i + len(batch)
-			doc.save(ignore_permissions=True, ignore_version=True)
+			# --- Update doc properties using set_value to avoid TimestampMismatchError ---
+			frappe.db.set_value(
+				"Lightning Upload",
+				docname,
+				{
+					"successful_records": successful_records,
+					"failed_records": failed_records,
+					"last_processed_row": i + len(batch)
+				},
+				update_modified=False
+			)
 			frappe.db.commit()
 
 			progress_data = {
@@ -484,7 +488,7 @@ def process_import_queue(docname):
 		if all_failed_rows:
 			error_start = time.time()
 			doc.error_log = json.dumps(all_failed_rows, indent=2)
-			doc.save(ignore_permissions=True, ignore_version=True)
+			frappe.db.set_value("Lightning Upload", docname, "error_log", doc.error_log)
 			doc.generate_error_file(all_failed_rows)
 			error_file_time = round((time.time() - error_start) * 1000, 2)
 
@@ -495,18 +499,23 @@ def process_import_queue(docname):
 		else:
 			final_status = "Completed"
 
-		# --- Final updates on the doc object before the final save ---
-		doc.status = final_status
-		doc.import_time = time_str
-		doc.timing_details = json.dumps({
-			"total_time_seconds": round(time_taken, 2),
-			"csv_load_time_ms": csv_time,
-			"error_file_time_ms": error_file_time,
-			"batch_timings": batch_timings,
-			"average_batch_time_ms": round(sum(b['total_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0,
-			"average_insert_time_ms": round(sum(b['insert_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0
-		}, indent=2)
-		doc.save(ignore_permissions=True, ignore_version=True)
+		# --- Final updates using set_value ---
+		frappe.db.set_value(
+			"Lightning Upload",
+			docname,
+			{
+				"status": final_status,
+				"import_time": time_str,
+				"timing_details": json.dumps({
+					"total_time_seconds": round(time_taken, 2),
+					"csv_load_time_ms": csv_time,
+					"error_file_time_ms": error_file_time,
+					"batch_timings": batch_timings,
+					"average_batch_time_ms": round(sum(b['total_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0,
+					"average_insert_time_ms": round(sum(b['insert_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0
+				}, indent=2)
+			}
+		)
 		frappe.db.commit()
 
 		final_progress = {
@@ -546,10 +555,14 @@ def process_import_queue(docname):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Error")
 		try:
-			doc = frappe.get_doc("Lightning Upload", docname) # Re-fetch in case of an error to ensure we have the latest state
-			doc.status = "Failed"
-			doc.error_log = str(e)
-			doc.save(ignore_permissions=True, ignore_version=True)
+			frappe.db.set_value(
+				"Lightning Upload",
+				docname,
+				{
+					"status": "Failed",
+					"error_log": str(e)
+				}
+			)
 			frappe.db.commit()
 			progress_key = f"lightning_import_{docname}"
 			error_progress = {
