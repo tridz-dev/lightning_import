@@ -115,6 +115,29 @@ class LightningUpload(Document):
 			field_types = {f.fieldname: f.fieldtype for f in meta.fields}
 			required_fields = [f.fieldname for f in meta.fields if f.reqd]
 			
+			# Identify existing records for 'Insert and Update' to allow validation to skip duplicates
+			existing_docs_map = {}
+			update_on_csv_col = self.update_on_field
+			mapped_update_field = None
+			
+			if self.import_type == "Insert and Update Records":
+				if not update_on_csv_col:
+					raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
+				
+				mapping = json.loads(self.field_mapping)
+				mapped_update_field = mapping.get(update_on_csv_col)
+				if not mapped_update_field:
+					raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
+				
+				keys_to_check = list(set([row.get(update_on_csv_col) for row in rows if row.get(update_on_csv_col)]))
+				if keys_to_check:
+					existing = frappe.get_all(
+						self.import_doctype,
+						filters={mapped_update_field: ['in', keys_to_check]},
+						fields=['name', mapped_update_field]
+					)
+					existing_docs_map = {str(doc[mapped_update_field]): doc.name for doc in existing}
+
 			# Step 1: Prepare all rows first (data conversion, validation)
 			records_to_process = []
 			for row in rows:
@@ -146,6 +169,12 @@ class LightningUpload(Document):
 							if 'creation' not in converted_data: converted_data['creation'] = frappe.utils.now()
 							if 'modified' not in converted_data: converted_data['modified'] = frappe.utils.now()
 							
+							# Assign name if found in existing_docs_map (for Insert and Update)
+							if self.import_type == "Insert and Update Records" and mapped_update_field:
+								key_val = row.get(update_on_csv_col)
+								if key_val and str(key_val) in existing_docs_map:
+									converted_data['name'] = existing_docs_map[str(key_val)]
+
 							self.validate_row_data(converted_data)
 							
 							records_to_process.append(converted_data)
@@ -159,32 +188,10 @@ class LightningUpload(Document):
 			# Step 2: Main logic fork based on the selected import type
 			try:
 					if self.import_type == "Insert and Update Records":
-							mapping = json.loads(self.field_mapping)
-							update_on_csv_col = self.update_on_field
-							if not update_on_csv_col:
-									raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
-							
-							mapped_update_field = mapping.get(update_on_csv_col)
-							if not mapped_update_field:
-									raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
-
-							keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
-							
-							existing_docs_map = {}
-							if keys_to_check:
-									existing = frappe.get_all(
-											self.import_doctype,
-											filters={mapped_update_field: ['in', keys_to_check]},
-											fields=['name', mapped_update_field]
-									)
-									existing_docs_map = {doc[mapped_update_field]: doc.name for doc in existing}
-
 							to_insert = []
 							to_update = []
 							for record in records_to_process:
-									key_value = record.get(mapped_update_field)
-									if key_value in existing_docs_map:
-											record['name'] = existing_docs_map[key_value]
+									if record.get('name'):
 											to_update.append(record)
 									else:
 											record['name'] = self.generate_docname(record)
@@ -659,6 +666,7 @@ def start_import(docname, mapping=None):
 		frappe.enqueue(
 			"lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.process_import_queue",
 			docname=docname,
+			# now=frappe.conf.developer_mode,
 			now=False,
 			queue="long",
 			timeout=3600
