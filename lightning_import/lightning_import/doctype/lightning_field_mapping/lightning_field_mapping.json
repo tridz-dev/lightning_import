@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "LFM-.#####",
  "creation": "2026-05-14 11:00:52.970656",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -25,10 +26,11 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-14 11:02:04.933447",
+ "modified": "2026-05-14 12:47:06.768504",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Field Mapping",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
