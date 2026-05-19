@@ -40,7 +40,7 @@ class LightningUpload(Document):
 
 		# Try to read the file as CSV
 		try:
-			with open(file_path, 'r', encoding='utf-8') as csvfile:
+			with open(file_path, 'r', encoding='utf-8-sig') as csvfile:
 				# Try to read first few lines to validate CSV format
 				reader = csv.reader(csvfile)
 				header = next(reader, None)
@@ -72,9 +72,16 @@ class LightningUpload(Document):
 		file_doc = frappe.get_doc("File", {"file_url": self.csv_file})
 		file_path = file_doc.get_full_path()
 		
-		with open(file_path, 'r', encoding='utf-8') as csvfile:
+		with open(file_path, 'r', encoding='utf-8-sig') as csvfile:
 			reader = csv.DictReader(csvfile)
-			return list(reader)
+			data = []
+			for row in reader:
+				clean_row = {}
+				for k, v in row.items():
+					if k is not None:
+						clean_row[k.strip()] = v.strip() if isinstance(v, str) else v
+				data.append(clean_row)
+			return data
 
 	def get_mapped_data(self):
 		"""Return list of mapped CSV rows using saved field mapping"""
@@ -120,23 +127,24 @@ class LightningUpload(Document):
 			update_on_csv_col = self.update_on_field
 			mapped_update_field = None
 			
-			if self.import_type == "Insert and Update Records":
+			if self.import_type in ("Insert and Update Records", "Update Existing Records"):
 				if not update_on_csv_col:
-					raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
-				
-				mapping = json.loads(self.field_mapping)
-				mapped_update_field = mapping.get(update_on_csv_col)
-				if not mapped_update_field:
-					raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
-				
-				keys_to_check = list(set([row.get(update_on_csv_col) for row in rows if row.get(update_on_csv_col)]))
-				if keys_to_check:
-					existing = frappe.get_all(
-						self.import_doctype,
-						filters={mapped_update_field: ['in', keys_to_check]},
-						fields=['name', mapped_update_field]
-					)
-					existing_docs_map = {str(doc[mapped_update_field]): doc.name for doc in existing}
+					if self.import_type == "Insert and Update Records":
+						raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
+				else:
+					mapping = json.loads(self.field_mapping)
+					mapped_update_field = mapping.get(update_on_csv_col)
+					if not mapped_update_field:
+						raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
+					
+					keys_to_check = list(set([row.get(update_on_csv_col) for row in rows if row.get(update_on_csv_col)]))
+					if keys_to_check:
+						existing = frappe.get_all(
+							self.import_doctype,
+							filters={mapped_update_field: ['in', keys_to_check]},
+							fields=['name', mapped_update_field]
+						)
+						existing_docs_map = {str(doc[mapped_update_field]): doc.name for doc in existing}
 
 			# Step 1: Prepare all rows first (data conversion, validation)
 			records_to_process = []
@@ -169,8 +177,8 @@ class LightningUpload(Document):
 							if 'creation' not in converted_data: converted_data['creation'] = frappe.utils.now()
 							if 'modified' not in converted_data: converted_data['modified'] = frappe.utils.now()
 							
-							# Assign name if found in existing_docs_map (for Insert and Update)
-							if self.import_type == "Insert and Update Records" and mapped_update_field:
+							# Assign name if found in existing_docs_map (for Insert and Update / Update Existing)
+							if self.import_type in ("Insert and Update Records", "Update Existing Records") and mapped_update_field:
 								key_val = row.get(update_on_csv_col)
 								if key_val and str(key_val) in existing_docs_map:
 									converted_data['name'] = existing_docs_map[str(key_val)]
@@ -363,12 +371,12 @@ def get_doctype_fields(doctype):
 def get_csv_headers(file_path):
 	"""Get headers from CSV file"""
 	try:
-		with open(file_path, 'r', encoding='utf-8') as csvfile:
+		with open(file_path, 'r', encoding='utf-8-sig') as csvfile:
 			reader = csv.reader(csvfile)
 			headers = next(reader, None)
 			if not headers:
 				frappe.throw("CSV file is empty")
-			return [header.strip() for header in headers]
+			return [header.strip() for header in headers if header]
 	except Exception as e:
 		frappe.throw(f"Error reading CSV headers: {str(e)}")
 		
