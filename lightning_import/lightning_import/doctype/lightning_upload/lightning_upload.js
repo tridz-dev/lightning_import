@@ -69,7 +69,19 @@ function setup_buttons(frm) {
             if (frm.doc.csv_file) {
                 frm.add_custom_button(__('Map Fields'), async () => {
                     await ensure_doc_saved(frm);
-                    open_combined_multi_mapping_dialog(frm);
+                    frappe.call({
+                        method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_multi_import',
+                        args: { docname: frm.doc.name },
+                        callback: function (r) {
+                            if (r.message && r.message.status === 'success') {
+                                frm.reload_doc().then(() => {
+                                    open_combined_multi_mapping_dialog(frm);
+                                });
+                            } else {
+                                frappe.msgprint(__('Error during auto-mapping. Please map fields manually.'));
+                            }
+                        }
+                    });
                 });
             }
         }
