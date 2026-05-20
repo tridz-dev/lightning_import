@@ -1,0 +1,119 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-20 05:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "execution_order",
+  "target_doctype",
+  "import_type",
+  "map_fields",
+  "field_mapping",
+  "update_on_field",
+  "duplicate_check_field",
+  "status",
+  "total_records",
+  "successful_records",
+  "failed_records",
+  "last_processed_row"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "execution_order",
+   "fieldtype": "Int",
+   "label": "Execution Order"
+  },
+  {
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Target DocType",
+   "options": "DocType",
+   "reqd": 1
+  },
+  {
+   "fieldname": "import_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Import Type",
+   "options": "Insert New Records\nUpdate Existing Records\nInsert and Update Records",
+   "reqd": 1
+  },
+  {
+   "fieldname": "map_fields",
+   "fieldtype": "Button",
+   "in_list_view": 1,
+   "label": "Map Fields"
+  },
+  {
+   "fieldname": "field_mapping",
+   "fieldtype": "Code",
+   "label": "Field Mapping",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "update_on_field",
+   "fieldtype": "Select",
+   "label": "Validate On CSV Column"
+  },
+  {
+   "fieldname": "duplicate_check_field",
+   "fieldtype": "Select",
+   "label": "Check Duplicates in Column"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nQueued\nIn Progress\nCompleted\nFailed\nPartial Success",
+   "read_only": 1,
+   "default": "Draft"
+  },
+  {
+   "fieldname": "total_records",
+   "fieldtype": "Int",
+   "label": "Total Records",
+   "read_only": 1
+  },
+  {
+   "fieldname": "successful_records",
+   "fieldtype": "Int",
+   "label": "Successful Records",
+   "read_only": 1
+  },
+  {
+   "fieldname": "failed_records",
+   "fieldtype": "Int",
+   "label": "Failed Records",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_processed_row",
+   "fieldtype": "Int",
+   "label": "Last Processed Row",
+   "read_only": 1
+  }
+ ],
+ "istable": 1,
+ "modified": "2026-05-20 05:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Lightning Import",
+ "name": "Lightning Multi Import Target",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "execution_order",
+ "sort_order": "ASC",
+ "states": []
+}

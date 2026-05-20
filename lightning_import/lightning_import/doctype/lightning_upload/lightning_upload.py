@@ -388,22 +388,86 @@ def import_rows_for_doctype(import_config, raw_rows):
 class LightningUpload(Document):
 	def validate(self):
 		"""Validate the document before save"""
-		if self.csv_file:
-			self.validate_csv_file()
-	
+		if not self.csv_file:
+			frappe.throw(_("CSV File is required."))
+			
+		self.validate_csv_file()
+		
+		# Enforce one import mode selected
+		if not self.single_import and not self.multiple_import:
+			frappe.throw(_("Please select either Single Import or Multiple Import."))
+			
+		if self.single_import and self.multiple_import:
+			frappe.throw(_("Both Single Import and Multiple Import cannot be selected together."))
+
+		if self.single_import:
+			if not self.import_doctype:
+				frappe.throw(_("DocType is required for Single Import."))
+			if not self.import_type:
+				frappe.throw(_("Import Type is required for Single Import."))
+			if self.import_type == "Insert and Update Records" and not self.update_on_field:
+				frappe.throw(_("Validate On CSV Column is required for 'Insert and Update Records' import type."))
+
+		elif self.multiple_import:
+			enabled_targets = [t for t in self.multi_import_targets if t.enabled]
+			if not enabled_targets:
+				frappe.throw(_("At least one enabled target row must exist for Multiple Import."))
+				
+			for idx, target in enumerate(self.multi_import_targets, start=1):
+				if not target.enabled:
+					continue
+				if not target.target_doctype:
+					frappe.throw(_("Row #{0}: Target DocType is required.").format(idx))
+				if not target.import_type:
+					frappe.throw(_("Row #{0}: Import Type is required.").format(idx))
+				if target.import_type == "Insert and Update Records" and not target.update_on_field:
+					frappe.throw(_("Row #{0}: Validate On CSV Column is required for 'Insert and Update Records' import type.").format(idx))
+
 	def validate_mappings(self):
 		"""Explicit mapping validation before starting the import process"""
-		if not self.field_mapping:
-			frappe.throw(_("Please map fields before starting import"))
-		meta = frappe.get_meta(self.import_doctype)
-		required_fields = [f.fieldname for f in meta.fields if f.reqd]
-		mapping = json.loads(self.field_mapping)
-		mapped_fields = [v for v in mapping.values() if v]
-		unmapped_required = [f for f in required_fields if f not in mapped_fields]
-		if unmapped_required:
-			frappe.throw(_("Please map all required fields for {0}: {1}").format(self.import_doctype, ", ".join(unmapped_required)))
-		if self.import_type == "Update Existing Records" and 'name' not in mapped_fields:
-			frappe.throw(_("For 'Update Existing Records', the target field 'name' (ID) must be mapped."))
+		if self.single_import:
+			if not self.field_mapping:
+				frappe.throw(_("Please map fields before starting import"))
+			meta = frappe.get_meta(self.import_doctype)
+			required_fields = [f.fieldname for f in meta.fields if f.reqd]
+			mapping = json.loads(self.field_mapping)
+			mapped_fields = [v for v in mapping.values() if v]
+			unmapped_required = [f for f in required_fields if f not in mapped_fields]
+			if unmapped_required:
+				frappe.throw(_("Please map all required fields for {0}: {1}").format(self.import_doctype, ", ".join(unmapped_required)))
+			
+			if self.import_type in ["Update Existing Records", "Insert and Update Records"]:
+				has_name = 'name' in mapped_fields
+				has_update_on = False
+				if self.update_on_field:
+					has_update_on = bool(mapping.get(self.update_on_field))
+				if not (has_name or has_update_on):
+					frappe.throw(_("For updating records, either the 'name' (ID) field or the configured 'update_on_field' ({0}) must be mapped.").format(self.update_on_field or ""))
+
+		elif self.multiple_import:
+			enabled_targets = [t for t in self.multi_import_targets if t.enabled]
+			if not enabled_targets:
+				frappe.throw(_("At least one enabled target row must exist for Multiple Import."))
+			for idx, target in enumerate(self.multi_import_targets, start=1):
+				if not target.enabled:
+					continue
+				if not target.field_mapping:
+					frappe.throw(_("Row #{0}: Field mapping is not defined. Please map fields for {1}.").format(idx, target.target_doctype))
+				meta = frappe.get_meta(target.target_doctype)
+				required_fields = [f.fieldname for f in meta.fields if f.reqd]
+				mapping = json.loads(target.field_mapping)
+				mapped_fields = [v for v in mapping.values() if v]
+				unmapped_required = [f for f in required_fields if f not in mapped_fields]
+				if unmapped_required:
+					frappe.throw(_("Row #{0}: Please map all required fields for {1}: {2}").format(idx, target.target_doctype, ", ".join(unmapped_required)))
+				
+				if target.import_type in ["Update Existing Records", "Insert and Update Records"]:
+					has_name = 'name' in mapped_fields
+					has_update_on = False
+					if target.update_on_field:
+						has_update_on = bool(mapping.get(target.update_on_field))
+					if not (has_name or has_update_on):
+						frappe.throw(_("Row #{0}: For updating records in {1}, either the 'name' (ID) field or the configured 'update_on_field' ({2}) must be mapped.").format(idx, target.target_doctype, target.update_on_field or ""))
 
 	def validate_csv_file(self):
 		"""Validate if the uploaded file is a valid CSV file"""
@@ -735,15 +799,18 @@ def process_import_queue(docname):
 				message=progress_data,
 				user=frappe.session.user,
 				after_commit=True
-			)
+		)
 
 		time_taken = time.time() - start_time
 		time_str = f"{int(time_taken)}s" if time_taken < 60 else f"{time_taken/60:.1f}m"
 
+		error_file_time = 0
 		if all_failed_rows:
-			doc.error_log = json.dumps([{"error": f['error'], "row": f['row']} for f in all_failed_rows], indent=2)
+			error_start = time.time()
+			doc.error_log = json.dumps(all_failed_rows, indent=2)
 			frappe.db.set_value("Lightning Upload", docname, "error_log", doc.error_log)
 			doc.generate_error_file(all_failed_rows)
+			error_file_time = round((time.time() - error_start) * 1000, 2)
 
 		if failed_records == total_rows:
 			final_status = "Failed"
@@ -757,7 +824,15 @@ def process_import_queue(docname):
 			docname,
 			{
 				"status": final_status,
-				"import_time": time_str
+				"import_time": time_str,
+				"timing_details": json.dumps({
+					"total_time_seconds": round(time_taken, 2),
+					"csv_load_time_ms": csv_time,
+					"error_file_time_ms": error_file_time,
+					"batch_timings": batch_timings,
+					"average_batch_time_ms": round(sum(b['total_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0,
+					"average_insert_time_ms": round(sum(b['insert_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0
+				}, indent=2)
 			}
 		)
 		frappe.db.commit()
@@ -768,9 +843,15 @@ def process_import_queue(docname):
 			"title": f"Import {final_status.lower()}",
 			"progress_key": progress_key,
 			"time_taken": time_str,
+			"total_records": total_rows,
 			"successful_records": successful_records,
 			"failed_records": failed_records,
-			"total_records": total_rows
+			"timing_details": {
+				"total_time_seconds": round(time_taken, 2),
+				"csv_load_time_ms": csv_time,
+				"error_file_time_ms": error_file_time,
+				"average_batch_time_ms": round(sum(b['total_time_ms'] for b in batch_timings) / len(batch_timings), 2) if batch_timings else 0
+			}
 		}
 		frappe.cache().set_value(progress_key, final_progress)
 		frappe.publish_realtime(
@@ -782,13 +863,25 @@ def process_import_queue(docname):
 
 		return {
 			"status": "success",
-			"message": f"Import completed. Successful: {successful_records}, Failed: {failed_records}. Time taken: {time_str}"
+			"message": f"Import {final_status.lower()}. Successful: {successful_records}, Failed: {failed_records}, Time taken: {time_str}",
+			"time_taken": time_str,
+			"total_records": total_rows,
+			"successful_records": successful_records,
+			"failed_records": failed_records,
+			"timing_details": final_progress["timing_details"]
 		}
 
 	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), "Lightning Import Processing Error")
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Error")
 		try:
-			frappe.db.set_value("Lightning Upload", docname, "status", "Failed")
+			frappe.db.set_value(
+				"Lightning Upload",
+				docname,
+				{
+					"status": "Failed",
+					"error_log": str(e)
+				}
+			)
 			frappe.db.commit()
 			progress_key = f"lightning_import_{docname}"
 			error_progress = {
@@ -824,7 +917,9 @@ def auto_map_and_validate(docname):
 
 @frappe.whitelist()
 def start_import(docname, mapping=None):
-	"""API endpoint to start the import process in the background"""
+	"""
+	API endpoint to start the single import process.
+	"""
 	try:
 		doc = frappe.get_doc("Lightning Upload", docname)
 		
@@ -848,6 +943,16 @@ def start_import(docname, mapping=None):
 		}
 		frappe.cache().set_value(progress_key, initial_progress)
 		
+		frappe.db.set_value("Lightning Upload", docname, "status", "Queued", update_modified=False)
+		frappe.db.commit()
+		
+		frappe.publish_realtime(
+			event='import_progress',
+			message=initial_progress,
+			user=frappe.session.user,
+			after_commit=True
+		)
+		
 		frappe.enqueue(
 			"lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.process_import_queue",
 			docname=docname,
@@ -863,9 +968,9 @@ def start_import(docname, mapping=None):
 		}
 		
 	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), "Lightning Import Start Error")
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Error")
 		try:
-			frappe.db.set_value("Lightning Upload", docname, "status", "Draft")
+			frappe.db.set_value("Lightning Upload", docname, "status", "Draft", update_modified=False)
 			frappe.db.commit()
 		except:
 			pass
@@ -1008,3 +1113,492 @@ def check_file_duplicates(docname, mapping=None):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Duplicate Check Error")
 		return {"status": "error", "message": str(e)}
+
+# ==========================================
+# NEW MULTIPLE IMPORT ENDPOINTS & HELPERS
+# ==========================================
+
+def generate_multi_error_file(doc, all_failed_rows):
+	"""Generate a single combined CSV error file for multiple target DocTypes"""
+	if not all_failed_rows:
+		return None
+		
+	fd, path = tempfile.mkstemp(suffix='.csv')
+	try:
+		with os.fdopen(fd, 'w', newline='', encoding='utf-8') as csvfile:
+			writer = csv.writer(csvfile)
+			
+			writer.writerow([
+				'Target DocType',
+				'CSV Row Number',
+				'Error Message',
+				'Original CSV Row Values',
+				'Mapped Row Values'
+			])
+			
+			for failed_row in all_failed_rows:
+				target_doctype = failed_row.get('target_doctype', '')
+				error_msg = failed_row.get('error', '')
+				row_dict = failed_row.get('row', {})
+				
+				row_num = row_dict.get('__csv_row_number__', '')
+				original_values = row_dict.get('__original_row__', {})
+				mapped_values = {k: v for k, v in row_dict.items() if k not in ['__csv_row_number__', '__original_row__']}
+				
+				writer.writerow([
+					target_doctype,
+					row_num,
+					error_msg,
+					json.dumps(original_values),
+					json.dumps(mapped_values)
+				])
+				
+		with open(path, 'rb') as f:
+			file_content = f.read()
+			
+		file_doc = save_file(
+			fname=f"multi_error_log_{doc.name}.csv",
+			content=file_content,
+			dt="Lightning Upload",
+			dn=doc.name,
+			folder="Home/Attachments",
+			is_private=1
+		)
+		
+		frappe.db.set_value("Lightning Upload", doc.name, "error_file", file_doc.file_url)
+		return file_doc.file_url
+		
+	finally:
+		if os.path.exists(path):
+			os.unlink(path)
+
+@frappe.whitelist()
+def check_multi_file_duplicates(docname):
+	"""Check duplicates for all enabled target DocTypes in a multiple import"""
+	try:
+		settings = frappe.get_single("Lightning Upload Settings")
+		if not settings.get("enable_file_duplicate_check"):
+			return {"status": "success", "has_duplicates": False, "targets": []}
+
+		doc = frappe.get_doc("Lightning Upload", docname)
+		if not doc.multiple_import:
+			return {"status": "success", "has_duplicates": False, "targets": []}
+
+		raw_rows = get_raw_sheet_rows(doc)
+		if not raw_rows:
+			return {"status": "success", "has_duplicates": False, "targets": []}
+
+		has_duplicates = False
+		targets_with_duplicates = []
+
+		for target in doc.multi_import_targets:
+			if not target.enabled:
+				continue
+			if not target.duplicate_check_field:
+				continue
+
+			csv_col_to_check = target.duplicate_check_field
+			value_to_rows = {}
+			for idx, row in enumerate(raw_rows, start=1):
+				val = str(row.get(csv_col_to_check, "") or "").strip()
+				if val == "":
+					continue
+				value_to_rows.setdefault(val, []).append(idx)
+
+			dup_entries = [
+				{"value": val, "rows": idxs, "count": len(idxs)}
+				for val, idxs in value_to_rows.items()
+				if len(idxs) > 1
+			]
+
+			if dup_entries:
+				has_duplicates = True
+				doctype_field = csv_col_to_check
+				if target.field_mapping:
+					mapping = json.loads(target.field_mapping)
+					doctype_field = mapping.get(csv_col_to_check) or csv_col_to_check
+
+				targets_with_duplicates.append({
+					"target_doctype": target.target_doctype,
+					"csv_column": csv_col_to_check,
+					"field": doctype_field,
+					"duplicate_values": dup_entries,
+					"count": len(dup_entries)
+				})
+
+		return {
+			"status": "success",
+			"has_duplicates": has_duplicates,
+			"targets": targets_with_duplicates
+		}
+
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Multi Duplicate Check Error")
+		return {"status": "error", "message": str(e)}
+
+@frappe.whitelist()
+def auto_map_multi_import(docname):
+	"""Generate field mapping for every enabled target DocType in multi_import_targets"""
+	try:
+		doc = frappe.get_doc("Lightning Upload", docname)
+		if not doc.multiple_import:
+			frappe.throw(_("Multiple Import is not enabled for this document."))
+
+		if not doc.csv_file:
+			frappe.throw(_("No CSV file attached."))
+
+		headers = get_sheet_headers(doc)
+
+		for target in doc.multi_import_targets:
+			if not target.enabled:
+				continue
+			if not target.target_doctype:
+				continue
+
+			mapping_res = auto_map_headers_for_doctype(headers, target.target_doctype)
+			target.field_mapping = json.dumps(mapping_res["mapping"])
+
+		doc.flags.ignore_validate = True
+		doc.save(ignore_permissions=True)
+		return {"status": "success", "message": _("Auto mapping completed for all enabled targets.")}
+
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Auto Map Multi Error")
+		return {"status": "error", "message": str(e)}
+
+@frappe.whitelist()
+def start_multi_import(docname):
+	"""API endpoint to start the multiple import process."""
+	try:
+		doc = frappe.get_doc("Lightning Upload", docname)
+		
+		if doc.status != "Draft":
+			frappe.throw(_("Import can only be started from Draft status"))
+		
+		if not doc.multiple_import:
+			frappe.throw(_("Multiple Import must be enabled."))
+
+		doc.validate_mappings()
+
+		progress_key = f"lightning_import_{docname}"
+		initial_progress = {
+			"status": "Queued",
+			"progress": 0,
+			"title": "Import queued...",
+			"progress_key": progress_key,
+			"multiple_import": True,
+			"successful_records": 0,
+			"failed_records": 0
+		}
+		frappe.cache().set_value(progress_key, initial_progress)
+		
+		frappe.db.set_value("Lightning Upload", docname, "status", "Queued", update_modified=False)
+		frappe.db.commit()
+		
+		frappe.publish_realtime(
+			event='import_progress',
+			message=initial_progress,
+			user=frappe.session.user,
+			after_commit=True
+		)
+		
+		frappe.enqueue(
+			"lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.process_multi_import_queue",
+			docname=docname,
+			now=False,
+			queue="long",
+			timeout=3600
+		)
+		
+		return {
+			"status": "success",
+			"message": _("Multiple Import process started successfully"),
+			"progress_key": progress_key
+		}
+		
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Multi Import Error")
+		try:
+			frappe.db.set_value("Lightning Upload", docname, "status", "Draft", update_modified=False)
+			frappe.db.commit()
+		except:
+			pass
+		return {
+			"status": "error",
+			"message": str(e)
+		}
+
+@frappe.whitelist()
+def process_multi_import_queue(docname):
+	"""Background job to execute multiple target DocType imports"""
+	start_time = time.time()
+
+	try:
+		doc = frappe.get_doc("Lightning Upload", docname)
+		if not doc.multiple_import:
+			frappe.throw(_("Multiple Import is not enabled for this document."))
+
+		frappe.db.set_value("Lightning Upload", docname, "status", "In Progress")
+		frappe.db.commit()
+
+		progress_key = f"lightning_import_{docname}"
+		initial_progress = {
+			"status": "In Progress",
+			"progress": 0,
+			"title": "Starting multiple import...",
+			"progress_key": progress_key,
+			"multiple_import": True
+		}
+		frappe.cache().set_value(progress_key, initial_progress)
+		frappe.publish_realtime(
+			event='import_progress',
+			message=initial_progress,
+			user=frappe.session.user,
+			after_commit=True
+		)
+
+		raw_rows = get_raw_sheet_rows(doc)
+		total_raw_rows = len(raw_rows)
+
+		enabled_targets = [t for t in doc.multi_import_targets if t.enabled]
+		enabled_targets.sort(key=lambda x: (x.execution_order if x.execution_order is not None and x.execution_order != "" else float('inf'), x.idx))
+		
+		total_targets = len(enabled_targets)
+		if total_targets == 0:
+			frappe.throw(_("No enabled targets to import."))
+
+		# Initialize target statuses in database
+		for target in enabled_targets:
+			frappe.db.set_value("Lightning Multi Import Target", target.name, {
+				"status": "Queued",
+				"total_records": 0,
+				"successful_records": 0,
+				"failed_records": 0,
+				"last_processed_row": 0
+			}, update_modified=False)
+		frappe.db.commit()
+
+		all_failed_rows = []
+		target_statuses = []
+		batch_size = LightningUploadSettings.get_batch_size()
+
+		overall_successful_records = 0
+		overall_failed_records = 0
+
+		for t_idx, target in enumerate(enabled_targets):
+			target_doctype = target.target_doctype
+			import_type = target.import_type
+			field_mapping = target.field_mapping
+			update_on_field = target.update_on_field
+
+			frappe.db.set_value("Lightning Multi Import Target", target.name, "status", "In Progress", update_modified=False)
+			frappe.db.commit()
+
+			mapped_rows = map_rows_for_doctype(raw_rows, field_mapping)
+			
+			valid_indices_and_rows = []
+			for idx, r in enumerate(mapped_rows, start=1):
+				if any(val is not None and str(val).strip() != "" for k, val in r.items() if not k.startswith("__")):
+					valid_indices_and_rows.append((idx, raw_rows[idx-1], r))
+
+			total_target_rows = len(valid_indices_and_rows)
+			
+			frappe.db.set_value("Lightning Multi Import Target", target.name, "total_records", total_target_rows, update_modified=False)
+			frappe.db.commit()
+
+			successful_records = 0
+			failed_records = 0
+
+			if total_target_rows == 0:
+				frappe.db.set_value("Lightning Multi Import Target", target.name, "status", "Completed", update_modified=False)
+				frappe.db.commit()
+				target_statuses.append("Completed")
+				continue
+
+			for i in range(0, total_target_rows, batch_size):
+				batch_slice = valid_indices_and_rows[i:i + batch_size]
+				batch_raw_rows = [item[1] for item in batch_slice]
+				
+				import_config = {
+					"import_doctype": target_doctype,
+					"import_type": import_type,
+					"field_mapping": field_mapping,
+					"update_on_field": update_on_field
+				}
+				
+				result = import_rows_for_doctype(import_config, batch_raw_rows)
+				
+				successful_records += result['success_count']
+				failed_records += len(result['failed_rows'])
+				
+				for failed_row in result['failed_rows']:
+					failed_row['target_doctype'] = target_doctype
+					all_failed_rows.append(failed_row)
+
+				frappe.db.set_value(
+					"Lightning Multi Import Target",
+					target.name,
+					{
+						"successful_records": successful_records,
+						"failed_records": failed_records,
+						"last_processed_row": min(total_target_rows, i + batch_size)
+					},
+					update_modified=False
+				)
+				frappe.db.commit()
+
+				overall_progress = min(100, int(((t_idx + (min(total_target_rows, i + batch_size) / total_target_rows)) / total_targets) * 100))
+
+				progress_data = {
+					"status": "In Progress",
+					"progress": overall_progress,
+					"title": f"Importing {target_doctype}... ({overall_progress}%)",
+					"progress_key": progress_key,
+					"multiple_import": True,
+					"current_target_doctype": target_doctype,
+					"total_targets": total_targets,
+					"current_target_index": t_idx + 1,
+					"target_status": "In Progress",
+					"target_successful_records": successful_records,
+					"target_failed_records": failed_records,
+					"target_total_records": total_target_rows
+				}
+				frappe.cache().set_value(progress_key, progress_data)
+				frappe.publish_realtime(
+					event='import_progress',
+					message=progress_data,
+					user=frappe.session.user,
+					after_commit=True
+				)
+
+			if failed_records == total_target_rows:
+				target_final_status = "Failed"
+			elif failed_records > 0:
+				target_final_status = "Partial Success"
+			else:
+				target_final_status = "Completed"
+
+			frappe.db.set_value("Lightning Multi Import Target", target.name, "status", target_final_status, update_modified=False)
+			frappe.db.commit()
+			target_statuses.append(target_final_status)
+
+			overall_successful_records += successful_records
+			overall_failed_records += failed_records
+
+		time_taken = time.time() - start_time
+		time_str = f"{int(time_taken)}s" if time_taken < 60 else f"{time_taken/60:.1f}m"
+
+		if all_failed_rows:
+			doc.error_log = json.dumps([
+				{
+					"target_doctype": f.get("target_doctype"),
+					"error": f.get("error"),
+					"row_num": f.get("row", {}).get("__csv_row_number__"),
+					"original_row": f.get("row", {}).get("__original_row__")
+				}
+				for f in all_failed_rows
+			], indent=2)
+			frappe.db.set_value("Lightning Upload", docname, "error_log", doc.error_log)
+			generate_multi_error_file(doc, all_failed_rows)
+
+		if all(status == "Completed" for status in target_statuses):
+			final_status = "Completed"
+		elif all(status == "Failed" for status in target_statuses):
+			final_status = "Failed"
+		else:
+			final_status = "Partial Success"
+
+		frappe.db.set_value(
+			"Lightning Upload",
+			docname,
+			{
+				"status": final_status,
+				"import_time": time_str,
+				"successful_records": overall_successful_records,
+				"failed_records": overall_failed_records,
+				"total_records": total_raw_rows
+			}
+		)
+		frappe.db.commit()
+
+		final_progress = {
+			"status": final_status,
+			"progress": 100,
+			"title": f"Multiple Import {final_status.lower()}",
+			"progress_key": progress_key,
+			"multiple_import": True,
+			"time_taken": time_str,
+			"successful_records": overall_successful_records,
+			"failed_records": overall_failed_records,
+			"total_records": total_raw_rows
+		}
+		frappe.cache().set_value(progress_key, final_progress)
+		frappe.publish_realtime(
+			event='import_progress',
+			message=final_progress,
+			user=frappe.session.user,
+			after_commit=True
+		)
+
+		return {
+			"status": "success",
+			"message": f"Multiple Import {final_status.lower()}. Successful: {overall_successful_records}, Failed: {overall_failed_records}, Time taken: {time_str}"
+		}
+
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Multiple Import Error")
+		try:
+			frappe.db.set_value(
+				"Lightning Upload",
+				docname,
+				{
+					"status": "Failed",
+					"error_log": str(e)
+				}
+			)
+			frappe.db.commit()
+			progress_key = f"lightning_import_{docname}"
+			error_progress = {
+				"status": "Failed",
+				"progress": 0,
+				"title": "Multiple Import failed",
+				"progress_key": progress_key,
+				"multiple_import": True,
+				"error": str(e)
+			}
+			frappe.cache().set_value(progress_key, error_progress)
+			frappe.publish_realtime(
+				event='import_progress',
+				message=error_progress,
+				user=frappe.session.user,
+				after_commit=True
+			)
+		except:
+			pass
+		return {
+			"status": "error",
+			"message": str(e)
+		}
+
+@frappe.whitelist()
+def get_auto_mapping_for_doctype(docname, doctype):
+	"""Get automatic field mapping for a specific target DocType"""
+	print("Docname:", docname)
+	print("Target DocType:", doctype)
+	try:
+		if not docname or docname.startswith("new-lightning-upload-"):
+			frappe.throw(_("Document name must be a saved document in the database."))
+			
+		if not frappe.db.exists("Lightning Upload", docname):
+			frappe.throw(_("Lightning Upload {0} not found").format(docname))
+
+		doc = frappe.get_doc("Lightning Upload", docname)
+		headers = get_sheet_headers(doc)
+		print("Headers:", headers)
+
+		res = auto_map_headers_for_doctype(headers, doctype)
+		print("Generated Mapping:", res.get("mapping", {}))
+		return res
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Error getting auto mapping")
+		return {"mapping": {}, "unmapped_required": []}

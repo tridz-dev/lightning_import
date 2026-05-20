@@ -7,9 +7,12 @@
  "engine": "InnoDB",
  "field_order": [
   "status",
+  "single_import",
+  "multiple_import",
   "import_doctype",
   "import_type",
   "csv_file",
+  "multi_import_targets",
   "field_mapping",
   "total_data",
   "error_file",
@@ -36,22 +39,36 @@
    "read_only": 1
   },
   {
+   "default": "1",
+   "fieldname": "single_import",
+   "fieldtype": "Check",
+   "label": "Single Import",
+   "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\""
+  },
+  {
+   "default": "0",
+   "fieldname": "multiple_import",
+   "fieldtype": "Check",
+   "label": "Multiple Import",
+   "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\""
+  },
+  {
+   "depends_on": "eval:doc.single_import == 1",
    "fieldname": "import_doctype",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "DocType",
    "options": "DocType",
-   "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\"",
-   "reqd": 1
+   "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\""
   },
   {
+   "depends_on": "eval:doc.single_import == 1",
    "fieldname": "import_type",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Import Type",
    "options": "Insert New Records\nUpdate Existing Records\nInsert and Update Records",
-   "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\"",
-   "reqd": 1
+   "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\""
   },
   {
    "fieldname": "csv_file",
@@ -59,6 +76,14 @@
    "label": "CSV File",
    "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\"",
    "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.multiple_import == 1",
+   "fieldname": "multi_import_targets",
+   "fieldtype": "Table",
+   "label": "Multi Import Targets",
+   "options": "Lightning Multi Import Target",
+   "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\""
   },
   {
    "description": "Mapping between CSV columns and DocType fields (JSON)",
@@ -135,13 +160,14 @@
    "read_only": 1
   },
   {
-   "depends_on": "eval:doc.import_type == \"Insert and Update Records\"",
+   "depends_on": "eval:doc.single_import == 1 && doc.import_type == \"Insert and Update Records\"",
    "description": "Select the unique field (like Email, Mobile No, etc.) to check if a record already exists.",
    "fieldname": "update_on_field",
    "fieldtype": "Select",
    "label": "Validate On CSV Column"
   },
   {
+   "depends_on": "eval:doc.single_import == 1",
    "description": "Select the CSV column to check for duplicates within the file.",
    "fieldname": "duplicate_check_field",
    "fieldtype": "Select",
@@ -152,7 +178,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-07 19:10:24.449237",
+ "modified": "2026-05-20 05:00:00.000000",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",
