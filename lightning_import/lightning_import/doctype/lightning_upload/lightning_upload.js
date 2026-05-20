@@ -935,7 +935,10 @@ async function open_combined_multi_mapping_dialog(frm) {
                 initialField = meta.backend_mapping[header];
             }
 
-
+            // Only generate mapping row if a matching alias exists or an existing mapping is defined
+            if (!initialField) {
+                return;
+            }
 
             tableHtml += `<tr class="mapping-dialog-row" data-header="${frappe.utils.escape_html(header)}">`;
             tableHtml += `<td><input type='text' class='form-control' value='${frappe.utils.escape_html(header)}' readonly tabindex='-1'></td>`;
