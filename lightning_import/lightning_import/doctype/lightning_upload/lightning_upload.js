@@ -53,7 +53,6 @@ function setup_buttons(frm) {
                 }
                 if (frm.doc.csv_file) {
                     frm.add_custom_button(__('Map Fields'), async () => {
-                        await ensure_doc_saved(frm);
                         open_field_mapping_dialog(frm);
                     });
                 }
@@ -73,7 +72,6 @@ function setup_buttons(frm) {
                 }
                 if (frm.doc.csv_file) {
                     frm.add_custom_button(__('Map Fields'), async () => {
-                        await ensure_doc_saved(frm);
                         frappe.call({
                             method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_multi_import',
                             args: { docname: frm.doc.name },
@@ -128,7 +126,6 @@ function update_import_mode_ui(frm) {
         
         frm.set_df_property('multi_import_targets', 'reqd', 1);
         frm.set_df_property('multi_import_targets', 'hidden', 0);
-
     }
 
     // 2. Populate CSV column dropdowns dynamically
