@@ -14,6 +14,7 @@ import tempfile
 from frappe.utils.file_manager import save_file
 import time
 import random
+import io
 
 # ==========================================
 # FILE HELPERS
@@ -598,47 +599,57 @@ class LightningUpload(Document):
 		return {'success_count': success_count, 'failed_rows': failed_rows}
 
 	def generate_error_file(self, failed_rows):
-		"""Generate a CSV file containing failed rows with error messages"""
+		"""Generate CSV files containing failed rows with error messages, chunked to avoid size limits."""
 		if not failed_rows:
 			return None
-			
-		fd, path = tempfile.mkstemp(suffix='.csv')
-		try:
-			with os.fdopen(fd, 'w', newline='', encoding='utf-8') as csvfile:
-				writer = csv.writer(csvfile)
-				
-				# Get original columns if available
-				row_example = failed_rows[0]['row']
-				headers = [k for k in row_example.keys() if not k.startswith("__")]
-				headers.extend(['Error Message', 'Row Number'])
-				writer.writerow(headers)
-				
-				for failed_row in failed_rows:
-					r_dict = failed_row['row']
-					row_data = [r_dict.get(h) for h in headers if not h.startswith("__")]
-					
-					row_num = r_dict.get('__csv_row_number__', '')
-					row_data.extend([failed_row['error'], row_num])
-					writer.writerow(row_data)
-			
-			with open(path, 'rb') as f:
-				file_content = f.read()
-				
-			file_doc = save_file(
-				fname=f"error_log_{self.name}.csv",
-				content=file_content,
-				dt="Lightning Upload",
-				dn=self.name,
-				folder="Home/Attachments",
-				is_private=1
-			)
-			
-			frappe.db.set_value("Lightning Upload", self.name, "error_file", file_doc.file_url)
-			return file_doc.file_url
-			
-		finally:
-			if os.path.exists(path):
-				os.unlink(path)
+
+		# Define maximum rows per chunk (adjustable)
+		CHUNK_SIZE = 4000
+		file_urls = []
+
+		# Determine base headers from first failed row (excluding internal metadata fields)
+		example_row = failed_rows[0]["row"]
+		base_headers = [k for k in example_row.keys() if not k.startswith("__")]
+		headers = base_headers + ["Error Message", "Row Number"]
+
+		# Process each chunk
+		for idx, start in enumerate(range(0, len(failed_rows), CHUNK_SIZE), start=1):
+			chunk = failed_rows[start:start + CHUNK_SIZE]
+			fd, path = tempfile.mkstemp(suffix='.csv')
+			try:
+				with os.fdopen(fd, 'w', newline='', encoding='utf-8') as csvfile:
+					writer = csv.writer(csvfile)
+					writer.writerow(headers)
+					for failed in chunk:
+						row_dict = failed["row"]
+						row_data = [row_dict.get(h) for h in base_headers]
+						row_num = row_dict.get('__csv_row_number__', '')
+						row_data.extend([failed["error"], row_num])
+						writer.writerow(row_data)
+
+				with open(path, 'rb') as f:
+					file_content = f.read()
+
+				file_doc = save_file(
+					fname=f"error_log_{self.name}_part_{idx}.csv",
+					content=file_content,
+					dt="Lightning Upload",
+					dn=self.name,
+					folder="Home/Attachments",
+					is_private=1,
+				)
+				file_urls.append(file_doc.file_url)
+			finally:
+				if os.path.exists(path):
+					os.unlink(path)
+
+		# Save reference to the first generated file in the primary error_file field
+		if file_urls:
+			frappe.db.set_value("Lightning Upload", self.name, "error_file", file_urls[0])
+			# Store all chunk URLs as JSON for reference
+			frappe.db.set_value("Lightning Upload", self.name, "error_log", json.dumps(file_urls))
+			return file_urls[0]
+		return None
 
 	def validate_row_data(self, data):
 		"""Validate row data before inserting"""
@@ -1122,55 +1133,112 @@ def generate_multi_error_file(doc, all_failed_rows):
 	"""Generate a single combined CSV error file for multiple target DocTypes"""
 	if not all_failed_rows:
 		return None
-		
-	fd, path = tempfile.mkstemp(suffix='.csv')
-	try:
-		with os.fdopen(fd, 'w', newline='', encoding='utf-8') as csvfile:
-			writer = csv.writer(csvfile)
-			
-			writer.writerow([
-				'Target DocType',
-				'CSV Row Number',
-				'Error Message',
-				'Original CSV Row Values',
-				'Mapped Row Values'
-			])
-			
-			for failed_row in all_failed_rows:
-				target_doctype = failed_row.get('target_doctype', '')
-				error_msg = failed_row.get('error', '')
-				row_dict = failed_row.get('row', {})
-				
-				row_num = row_dict.get('__csv_row_number__', '')
-				original_values = row_dict.get('__original_row__', {})
-				mapped_values = {k: v for k, v in row_dict.items() if k not in ['__csv_row_number__', '__original_row__']}
-				
-				writer.writerow([
-					target_doctype,
-					row_num,
-					error_msg,
-					json.dumps(original_values),
-					json.dumps(mapped_values)
-				])
-				
-		with open(path, 'rb') as f:
-			file_content = f.read()
-			
-		file_doc = save_file(
-			fname=f"multi_error_log_{doc.name}.csv",
-			content=file_content,
-			dt="Lightning Upload",
-			dn=doc.name,
-			folder="Home/Attachments",
-			is_private=1
-		)
-		
-		frappe.db.set_value("Lightning Upload", doc.name, "error_file", file_doc.file_url)
-		return file_doc.file_url
-		
-	finally:
-		if os.path.exists(path):
-			os.unlink(path)
+
+	# Configuration
+	CHUNK_SIZE = 500  # aggressive chunking to keep each file small
+	MAX_SAFE_SIZE = 10 * 1024 * 1024 - 1024  # 10MB minus 1KB margin
+	file_urls = []
+
+	def chunk_list(lst, size):
+		for i in range(0, len(lst), size):
+			yield lst[i:i + size]
+
+	def generate_csv_content_for_chunk(chunk_rows):
+		# Keep rows lightweight: include only non-meta row fields and short error message
+		output = io.StringIO()
+		writer = csv.writer(output)
+		# Determine headers from first row
+		first = chunk_rows[0]
+		row_fields = [k for k in (first.get('row') or {}).keys() if not k.startswith('__')]
+		headers = ['Target DocType', 'CSV Row Number', 'Error Message'] + row_fields
+		writer.writerow(headers)
+		for fr in chunk_rows:
+			target_doctype = fr.get('target_doctype', '')
+			row = fr.get('row') or {}
+			row_num = row.get('__csv_row_number__', '')
+			error_msg = fr.get('error', '')
+			# Keep error message short
+			if isinstance(error_msg, str):
+				error_msg_short = error_msg[:1024]
+			else:
+				error_msg_short = str(error_msg)[:1024]
+			row_values = [row.get(f) for f in row_fields]
+			writer.writerow([target_doctype, row_num, error_msg_short] + row_values)
+		return output.getvalue()
+
+	# First-level chunking
+	for idx, base_chunk in enumerate(chunk_list(all_failed_rows, CHUNK_SIZE), start=1):
+		# Generate CSV content for this chunk
+		csv_content = generate_csv_content_for_chunk(base_chunk)
+		print(len(csv_content))
+		content_bytes = csv_content.encode('utf-8')
+
+		# If content still too large, split the base_chunk further
+		if len(content_bytes) > MAX_SAFE_SIZE:
+			# Split into halves until each piece is under MAX_SAFE_SIZE
+			sub_chunks = list(chunk_list(base_chunk, max(1, CHUNK_SIZE // 2)))
+			# Process sub-chunks individually
+			for sidx, sub in enumerate(sub_chunks, start=1):
+				sub_csv = generate_csv_content_for_chunk(sub)
+				print(len(sub_csv))
+				sub_bytes = sub_csv.encode('utf-8')
+				if len(sub_bytes) > MAX_SAFE_SIZE:
+					# As a last resort, split per-row to guarantee safety
+					for ridx, single in enumerate(chunk_list(sub, 1), start=1):
+						single_csv = generate_csv_content_for_chunk(single)
+						print(len(single_csv))
+						single_bytes = single_csv.encode('utf-8')
+						if len(single_bytes) > MAX_SAFE_SIZE:
+							# If a single row exceeds MAX_SAFE_SIZE (very unlikely), truncate row fields
+							single_csv = single_csv[:MAX_SAFE_SIZE]
+							single_bytes = single_csv.encode('utf-8', errors='ignore')
+						file_doc = save_file(
+							fname=f"multi_error_log_{doc.name}_part_{idx}_{sidx}_{ridx}.csv",
+							content=single_bytes,
+							dt="Lightning Upload",
+							dn=doc.name,
+							folder="Home/Attachments",
+							is_private=1
+						)
+						file_urls.append(file_doc.file_url)
+					else:
+						file_doc = save_file(
+							fname=f"multi_error_log_{doc.name}_part_{idx}_{sidx}_{ridx}.csv",
+							content=single_bytes,
+							dt="Lightning Upload",
+							dn=doc.name,
+							folder="Home/Attachments",
+							is_private=1
+						)
+						file_urls.append(file_doc.file_url)
+				else:
+					file_doc = save_file(
+						fname=f"multi_error_log_{doc.name}_part_{idx}_{sidx}.csv",
+						content=sub_bytes,
+						dt="Lightning Upload",
+						dn=doc.name,
+						folder="Home/Attachments",
+						is_private=1
+					)
+					file_urls.append(file_doc.file_url)
+		else:
+			# Content is safe to save
+			file_doc = save_file(
+				fname=f"multi_error_log_{doc.name}_part_{idx}.csv",
+				content=content_bytes,
+				dt="Lightning Upload",
+				dn=doc.name,
+				folder="Home/Attachments",
+				is_private=1
+			)
+			file_urls.append(file_doc.file_url)
+
+	# Save reference to the first generated file in the primary error_file field
+	if file_urls:
+		frappe.db.set_value("Lightning Upload", doc.name, "error_file", file_urls[0])
+		frappe.db.set_value("Lightning Upload", doc.name, "error_log", json.dumps(file_urls))
+		return file_urls[0]
+	return None
 
 @frappe.whitelist()
 def check_multi_file_duplicates(docname):
