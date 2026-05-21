@@ -161,12 +161,16 @@ class LightningUpload(Document):
 												try:
 														if value:
 																if field_type == "Int": converted_data[field] = int(value)
+																elif field_type == "Check": converted_data[field] = 1 if str(value).lower() in ("1", "yes", "true", "y", "t") else 0
 																elif field_type == "Float": converted_data[field] = float(value)
 																elif field_type == "Date": converted_data[field] = frappe.utils.getdate(value)
 																elif field_type == "Datetime": converted_data[field] = frappe.utils.get_datetime(value)
 																else: converted_data[field] = value
 														else:
-																converted_data[field] = None
+																if field_type == "Check":
+																		converted_data[field] = 0
+																else:
+																		converted_data[field] = None
 												except (ValueError, TypeError):
 														raise ValueError(f"Invalid value for field {field}: {value}")
 										else:
@@ -262,12 +266,26 @@ class LightningUpload(Document):
 			if not records: return
 			
 			meta = frappe.get_meta(self.import_doctype)
+			field_types = {f.fieldname: f.fieldtype for f in meta.fields}
 			all_fields = ['name', 'owner', 'modified_by', 'creation', 'modified'] + [f.fieldname for f in meta.fields]
 			fields = sorted(list(set(k for r in records for k in r.keys() if k in all_fields)))
 			
 			values_list = []
 			for record in records:
-					row_values = [frappe.db.escape(cstr(record.get(f))) for f in fields]
+					row_values = []
+					for f in fields:
+							val = record.get(f)
+							if val is None:
+									if field_types.get(f) == "Check":
+											row_values.append("0")
+									else:
+											row_values.append("NULL")
+							elif isinstance(val, bool):
+									row_values.append("1" if val else "0")
+							elif isinstance(val, (int, float)):
+									row_values.append(str(val))
+							else:
+									row_values.append(frappe.db.escape(str(val)))
 					values_list.append(f"({', '.join(row_values)})")
 			
 			sql = f"""
@@ -285,6 +303,8 @@ class LightningUpload(Document):
 			return
 
 		meta = frappe.get_meta(self.import_doctype)
+		field_types = {f.fieldname: f.fieldtype for f in meta.fields}
+		
 		# Exclude system fields from being updated directly, except 'modified' and 'modified_by'
 		# 'name' is used for the WHERE clause, not for updating
 		updatable_fields = [f.fieldname for f in meta.meta_fields if hasattr(meta, 'meta_fields')] if hasattr(meta, 'meta_fields') else [f.fieldname for f in meta.fields] + ['modified', 'modified_by']
@@ -300,10 +320,22 @@ class LightningUpload(Document):
 		set_clauses = []
 		for field in fields_to_update:
 			# Build the CASE statement for each field
-			case_statements = [
-				f"WHEN `name` = {frappe.db.escape(record['name'])} THEN {frappe.db.escape(cstr(record.get(field)))}"
-				for record in records if record.get('name') and record.get(field) is not None
-			]
+			case_statements = []
+			for record in records:
+				if record.get('name') and field in record:
+					val = record[field]
+					if val is None:
+						if field_types.get(field) == "Check":
+							escaped_val = "0"
+						else:
+							escaped_val = "NULL"
+					elif isinstance(val, bool):
+						escaped_val = "1" if val else "0"
+					elif isinstance(val, (int, float)):
+						escaped_val = str(val)
+					else:
+						escaped_val = frappe.db.escape(str(val))
+					case_statements.append(f"WHEN `name` = {frappe.db.escape(record['name'])} THEN {escaped_val}")
 			
 			if case_statements:
 				set_clauses.append(f"`{field}` = CASE {' '.join(case_statements)} ELSE `{field}` END")
