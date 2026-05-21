@@ -206,7 +206,14 @@ class LightningUpload(Document):
 						if self.import_type == "Insert and Update Records":
 								to_insert = []
 								to_update = []
-								existing_names = set(existing_docs_map.values())
+								
+								all_names = [r.get('name') for r in records_to_process if r.get('name')]
+								existing_names = set([doc.name for doc in frappe.get_all(
+									self.import_doctype,
+									filters={"name": ["in", all_names]},
+									fields=["name"]
+								)]) if all_names else set()
+								
 								for record in records_to_process:
 										if record.get('name') in existing_names:
 												to_update.append(record)
@@ -577,7 +584,15 @@ def process_import_queue(docname):
 		error_file_time = 0
 		if all_failed_rows:
 			error_start = time.time()
-			doc.error_log = json.dumps(all_failed_rows, indent=2)
+			# Store only the first 100 errors in the database to prevent exceeding MySQL's max_allowed_packet.
+			# The complete log of all errors is generated in the downloadable CSV file.
+			db_error_log = all_failed_rows[:100]
+			if len(all_failed_rows) > 100:
+				db_error_log.append({
+					"row": {},
+					"error": f"... and {len(all_failed_rows) - 100} more errors. Please download the attached error CSV file for the complete list of errors."
+				})
+			doc.error_log = json.dumps(db_error_log, indent=2)
 			doc.save(ignore_permissions=True, ignore_version=True)
 			doc.generate_error_file(all_failed_rows)
 			error_file_time = round((time.time() - error_start) * 1000, 2)
