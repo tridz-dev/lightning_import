@@ -123,16 +123,6 @@ function update_import_mode_ui(frm) {
         frm.set_df_property('multi_import_targets', 'reqd', 1);
         frm.set_df_property('multi_import_targets', 'hidden', 0);
 
-        // Hide Map Fields column inside child table grid
-        if (frm.fields_dict['multi_import_targets'] && frm.fields_dict['multi_import_targets'].grid) {
-            const grid = frm.fields_dict['multi_import_targets'].grid;
-            grid.docfields.forEach(df => {
-                if (df.fieldname === 'map_fields') {
-                    df.hidden = 1;
-                }
-            });
-            grid.refresh();
-        }
     }
 
     // 2. Populate CSV column dropdowns dynamically

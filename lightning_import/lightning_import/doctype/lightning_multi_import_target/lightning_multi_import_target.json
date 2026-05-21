@@ -9,7 +9,6 @@
   "execution_order",
   "target_doctype",
   "import_type",
-  "map_fields",
   "field_mapping",
   "update_on_field",
   "duplicate_check_field",
@@ -46,12 +45,6 @@
    "label": "Import Type",
    "options": "Insert New Records\nUpdate Existing Records\nInsert and Update Records",
    "reqd": 1
-  },
-  {
-   "fieldname": "map_fields",
-   "fieldtype": "Button",
-   "in_list_view": 1,
-   "label": "Map Fields"
   },
   {
    "fieldname": "field_mapping",
