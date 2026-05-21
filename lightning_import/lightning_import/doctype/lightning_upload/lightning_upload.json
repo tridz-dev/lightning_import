@@ -135,7 +135,7 @@
    "read_only": 1
   },
   {
-   "depends_on": "eval:doc.import_type == \"Insert and Update Records\"",
+   "depends_on": "eval:doc.import_type == \"Insert and Update Records\" || doc.import_type == \"Update Existing Records\"",
    "description": "Select the unique field (like Email, Mobile No, etc.) to check if a record already exists.",
    "fieldname": "update_on_field",
    "fieldtype": "Select",

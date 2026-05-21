@@ -54,7 +54,7 @@ frappe.ui.form.on('Lightning Upload', {
 
         // Also trigger the import_type logic on refresh
         // to populate the dropdown if the form loads in the right state
-        if (frm.doc.import_type === 'Insert and Update Records' && frm.doc.csv_file) {
+        if ((frm.doc.import_type === 'Insert and Update Records' || frm.doc.import_type === 'Update Existing Records') && frm.doc.csv_file) {
             frm.events.populate_update_on_field(frm);
         }
 
@@ -82,7 +82,7 @@ frappe.ui.form.on('Lightning Upload', {
     },
 
     csv_file: function(frm) {
-        if (frm.doc.import_type === 'Insert and Update Records') {
+        if (frm.doc.import_type === 'Insert and Update Records' || frm.doc.import_type === 'Update Existing Records') {
             if (frm.doc.csv_file) {
                 frm.events.populate_update_on_field(frm);
             }
@@ -96,7 +96,7 @@ frappe.ui.form.on('Lightning Upload', {
     },
 
     import_type: function(frm) {
-        if (frm.doc.import_type === 'Insert and Update Records') {
+        if (frm.doc.import_type === 'Insert and Update Records' || frm.doc.import_type === 'Update Existing Records') {
             if (frm.doc.csv_file) {
                 frm.events.populate_update_on_field(frm);
             } else {
