@@ -32,57 +32,63 @@ function setup_buttons(frm) {
     frm.clear_custom_buttons();
 
     if (frm.doc.status === "Draft") {
-        if (frm.doc.single_import) {
-            // Keep standard Save action as primary if form is dirty, otherwise set Start Import as primary
-            if (frm.is_dirty() || frm.doc.__unsaved) {
-                frm.page.set_primary_action(__('Save'), () => frm.save());
-                frm.add_custom_button(__('Start Import'), async () => {
-                    await ensure_doc_saved(frm);
-                    start_import(frm);
-                });
-            } else {
-                frm.page.set_primary_action(__('Start Import'), async () => {
-                    await ensure_doc_saved(frm);
-                    start_import(frm);
-                });
-            }
-            if (frm.doc.csv_file) {
-                frm.add_custom_button(__('Map Fields'), async () => {
-                    await ensure_doc_saved(frm);
-                    open_field_mapping_dialog(frm);
-                });
-            }
-        } else if (frm.doc.multiple_import) {
-            // Keep standard Save action as primary if form is dirty, otherwise set Start Multi Import as primary
-            if (frm.is_dirty() || frm.doc.__unsaved) {
-                frm.page.set_primary_action(__('Save'), () => frm.save());
-                frm.add_custom_button(__('Start Multi Import'), async () => {
-                    await ensure_doc_saved(frm);
-                    start_multi_import(frm);
-                });
-            } else {
-                frm.page.set_primary_action(__('Start Multi Import'), async () => {
-                    await ensure_doc_saved(frm);
-                    start_multi_import(frm);
-                });
-            }
-            if (frm.doc.csv_file) {
-                frm.add_custom_button(__('Map Fields'), async () => {
-                    await ensure_doc_saved(frm);
-                    frappe.call({
-                        method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_multi_import',
-                        args: { docname: frm.doc.name },
-                        callback: function (r) {
-                            if (r.message && r.message.status === 'success') {
-                                frm.reload_doc().then(() => {
-                                    open_combined_multi_mapping_dialog(frm);
-                                });
-                            } else {
-                                frappe.msgprint(__('Error during auto-mapping. Please map fields manually.'));
-                            }
-                        }
+        if (frm.is_new()) {
+            // Before Drafting / Before Save: Show only Save button
+            frm.page.set_primary_action(__('Save'), () => frm.save());
+        } else {
+            // After Drafting / After Save: Keep existing behavior
+            if (frm.doc.single_import) {
+                // Keep standard Save action as primary if form is dirty, otherwise set Start Import as primary
+                if (frm.is_dirty() || frm.doc.__unsaved) {
+                    frm.page.set_primary_action(__('Save'), () => frm.save());
+                    frm.add_custom_button(__('Start Import'), async () => {
+                        await ensure_doc_saved(frm);
+                        start_import(frm);
                     });
-                });
+                } else {
+                    frm.page.set_primary_action(__('Start Import'), async () => {
+                        await ensure_doc_saved(frm);
+                        start_import(frm);
+                    });
+                }
+                if (frm.doc.csv_file) {
+                    frm.add_custom_button(__('Map Fields'), async () => {
+                        await ensure_doc_saved(frm);
+                        open_field_mapping_dialog(frm);
+                    });
+                }
+            } else if (frm.doc.multiple_import) {
+                // Keep standard Save action as primary if form is dirty, otherwise set Start Multi Import as primary
+                if (frm.is_dirty() || frm.doc.__unsaved) {
+                    frm.page.set_primary_action(__('Save'), () => frm.save());
+                    frm.add_custom_button(__('Start Multi Import'), async () => {
+                        await ensure_doc_saved(frm);
+                        start_multi_import(frm);
+                    });
+                } else {
+                    frm.page.set_primary_action(__('Start Multi Import'), async () => {
+                        await ensure_doc_saved(frm);
+                        start_multi_import(frm);
+                    });
+                }
+                if (frm.doc.csv_file) {
+                    frm.add_custom_button(__('Map Fields'), async () => {
+                        await ensure_doc_saved(frm);
+                        frappe.call({
+                            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_multi_import',
+                            args: { docname: frm.doc.name },
+                            callback: function (r) {
+                                if (r.message && r.message.status === 'success') {
+                                    frm.reload_doc().then(() => {
+                                        open_combined_multi_mapping_dialog(frm);
+                                    });
+                                } else {
+                                    frappe.msgprint(__('Error during auto-mapping. Please map fields manually.'));
+                                }
+                            }
+                        });
+                    });
+                }
             }
         }
     }
