@@ -440,17 +440,21 @@ class LightningUpload(Document):
 			with open(path, 'rb') as f:
 				file_content = f.read()
 				
-			file_doc = save_file(
-				fname=f"error_log_{self.name}.csv",
-				content=file_content,
-				dt="Lightning Upload",
-				dn=self.name,
-				folder="Home/Attachments",
-				is_private=1
-			)
-			
-			frappe.db.set_value("Lightning Upload", self.name, "error_file", file_doc.file_url)
-			return file_doc.file_url
+			try:
+				file_doc = save_file(
+					fname=f"error_log_{self.name}.csv",
+					content=file_content,
+					dt="Lightning Upload",
+					dn=self.name,
+					folder="Home/Attachments",
+					is_private=1
+				)
+				
+				frappe.db.set_value("Lightning Upload", self.name, "error_file", file_doc.file_url)
+				return file_doc.file_url
+			except Exception as e:
+				frappe.log_error(frappe.get_traceback(), "Lightning Import Save Error File Failed")
+				return None
 			
 		finally:
 			if os.path.exists(path):
