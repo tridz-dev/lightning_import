@@ -154,7 +154,8 @@ def map_rows_for_doctype(raw_rows, mapping):
 		mapped_row = {}
 		for csv_field, doctype_field in mapping.items():
 			if doctype_field:  # Only map if field is not empty
-				mapped_row[doctype_field] = row.get(csv_field, None)
+				actual_csv_field = csv_field.split("::")[0] if "::" in csv_field else csv_field
+				mapped_row[doctype_field] = row.get(actual_csv_field, None)
 		# Inject meta-fields for precise row tracking
 		mapped_row["__csv_row_number__"] = idx
 		mapped_row["__original_row__"] = row
@@ -320,7 +321,10 @@ def import_rows_for_doctype(import_config, raw_rows):
 			if not update_on_csv_col:
 				raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
 			
-			mapped_update_field = mapping.get(update_on_csv_col)
+			mapped_update_field = (
+				mapping.get(f"{update_on_csv_col}::{import_doctype}")
+				or mapping.get(update_on_csv_col)
+			)
 			if not mapped_update_field:
 				raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
 
@@ -466,7 +470,10 @@ class LightningUpload(Document):
 					has_name = 'name' in mapped_fields
 					has_update_on = False
 					if target.update_on_field:
-						has_update_on = bool(mapping.get(target.update_on_field))
+						has_update_on = bool(
+							mapping.get(f"{target.update_on_field}::{target.target_doctype}")
+							or mapping.get(target.update_on_field)
+						)
 					if not (has_name or has_update_on):
 						frappe.throw(_("Row #{0}: For updating records in {1}, either the 'name' (ID) field or the configured 'update_on_field' ({2}) must be mapped.").format(idx, target.target_doctype, target.update_on_field or ""))
 
@@ -1284,7 +1291,12 @@ def check_multi_file_duplicates(docname):
 				doctype_field = csv_col_to_check
 				if target.field_mapping:
 					mapping = json.loads(target.field_mapping)
-					doctype_field = mapping.get(csv_col_to_check) or csv_col_to_check
+					combined_key = f"{csv_col_to_check}::{target.target_doctype}"
+					doctype_field = (
+						mapping.get(combined_key)
+						or mapping.get(csv_col_to_check)
+						or csv_col_to_check
+					)
 
 				targets_with_duplicates.append({
 					"target_doctype": target.target_doctype,
@@ -1324,7 +1336,12 @@ def auto_map_multi_import(docname):
 				continue
 
 			mapping_res = auto_map_headers_for_doctype(headers, target.target_doctype)
-			target.field_mapping = json.dumps(mapping_res["mapping"])
+			# Rekey mapping to combined header::doctype format for unique identity
+			combined_mapping = {
+				f"{header}::{target.target_doctype}": field
+				for header, field in mapping_res["mapping"].items()
+			}
+			target.field_mapping = json.dumps(combined_mapping)
 
 		doc.flags.ignore_validate = True
 		doc.save(ignore_permissions=True)

@@ -718,7 +718,7 @@ function open_field_mapping_dialog(frm) {
                 ];
                 const fieldOptions = fields.concat(system_fields);
 
-                let existingMapping = {};
+                let existingMapping = null;
                 try {
                     if (frm.doc.field_mapping) {
                         existingMapping = JSON.parse(frm.doc.field_mapping);
@@ -875,20 +875,7 @@ async function open_combined_multi_mapping_dialog(frm) {
             const fieldOptions = fields.concat(system_fields);
 
             // Fetch backend auto-mapping safely
-            let auto_mapping_res;
-            try {
-                auto_mapping_res = await frappe.xcall('lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_auto_mapping_for_doctype', {
-                    docname: frm.doc.name,
-                    doctype: target.target_doctype
-                });
-            } catch (err) {
-                console.error(`Error getting auto mapping for ${target.target_doctype}:`, err);
-                auto_mapping_res = { mapping: {} };
-            }
-            
-            const backend_mapping = auto_mapping_res ? auto_mapping_res.mapping : {};
-
-            let existingMapping = {};
+            let existingMapping = null;
             try {
                 if (target.field_mapping) {
                     existingMapping = JSON.parse(target.field_mapping);
@@ -922,8 +909,13 @@ async function open_combined_multi_mapping_dialog(frm) {
 
             // Determine initial Field for this specific target
             let initialField = '';
-            if (meta.existingMapping[header]) {
+            const uniqueKey = `${header}::${doctype}`;
+            if (meta.existingMapping.hasOwnProperty(uniqueKey)) {
+                initialField = meta.existingMapping[uniqueKey];
+            } else if (meta.existingMapping.hasOwnProperty(header)) {
                 initialField = meta.existingMapping[header];
+            } else if (meta.backend_mapping[uniqueKey]) {
+                initialField = meta.backend_mapping[uniqueKey];
             } else if (meta.backend_mapping[header]) {
                 initialField = meta.backend_mapping[header];
             }
@@ -933,11 +925,11 @@ async function open_combined_multi_mapping_dialog(frm) {
                 return;
             }
 
-            tableHtml += `<tr class="mapping-dialog-row" data-header="${frappe.utils.escape_html(header)}">`;
+            tableHtml += `<tr class="mapping-dialog-row" data-header-doctype="${frappe.utils.escape_html(header)}::${frappe.utils.escape_html(doctype)}">`;
             tableHtml += `<td><input type='text' class='form-control' value='${frappe.utils.escape_html(header)}' readonly tabindex='-1'></td>`;
             
             // DocType Dropdown Selector
-            tableHtml += `<td><select class='form-control combined-doctype-select' data-header="${frappe.utils.escape_html(header)}" style="width:100%;">`;
+            tableHtml += `<td><select class='form-control combined-doctype-select' data-header-doctype="${frappe.utils.escape_html(header)}::${frappe.utils.escape_html(doctype)}" style="width:100%;">`;
             tableHtml += `<option value=''>Don't Import</option>`;
             Object.keys(doctypes_metadata).forEach(dt => {
                 const selected = dt === doctype ? 'selected' : '';
@@ -946,7 +938,7 @@ async function open_combined_multi_mapping_dialog(frm) {
             tableHtml += `</select></td>`;
 
             // Target Field Dropdown Selector
-            tableHtml += `<td><select class='form-control combined-field-select' data-header="${frappe.utils.escape_html(header)}" style="width:100%;">`;
+            tableHtml += `<td><select class='form-control combined-field-select' data-header-doctype="${frappe.utils.escape_html(header)}::${frappe.utils.escape_html(doctype)}" style="width:100%;">`;
             tableHtml += `<option value=''>Don't Import</option>`;
             if (doctype && doctypes_metadata[doctype]) {
                 const options = doctypes_metadata[doctype].fields;
@@ -969,7 +961,7 @@ async function open_combined_multi_mapping_dialog(frm) {
             { fieldtype: 'HTML', fieldname: 'mapping_table', options: tableHtml }
         ],
         primary_action_label: __('Save Mapping'),
-        primary_action() {
+        async primary_action() {
             // Collect mapped values for each target row
             const targetMappings = {};
             enabled_targets.forEach(t => {
@@ -979,19 +971,24 @@ async function open_combined_multi_mapping_dialog(frm) {
             // Gather inputs from table
             let hasHeaderDoctypeDuplicate = false;
             d.$wrapper.find('.mapping-dialog-row').each(function () {
-                const header = $(this).data('header');
+                const headerDoctype = $(this).data('header-doctype');
+                if (!headerDoctype) return;
+
+                const parts = headerDoctype.split("::");
+                const header = parts[0];
                 const docType = $(this).find('.combined-doctype-select').val();
                 const field = $(this).find('.combined-field-select').val();
                 
                 if (docType && field) {
                     const meta = doctypes_metadata[docType];
                     if (meta && targetMappings[meta.targetName]) {
-                        if (targetMappings[meta.targetName][header]) {
+                        const uniqueKey = `${header}::${docType}`;
+                        if (targetMappings[meta.targetName][uniqueKey]) {
                             frappe.msgprint(__('Invalid Mapping: CSV Header "{0}" is mapped to multiple fields in DocType "{1}".', [header, docType]));
                             hasHeaderDoctypeDuplicate = true;
                             return false; // break jquery each loop
                         }
-                        targetMappings[meta.targetName][header] = field;
+                        targetMappings[meta.targetName][uniqueKey] = field;
                     }
                 }
             });
@@ -1029,24 +1026,44 @@ async function open_combined_multi_mapping_dialog(frm) {
             // Commit mappings to the child rows in the form doc
             enabled_targets.forEach(t => {
                 const mappingString = JSON.stringify(targetMappings[t.name]);
-                frappe.model.set_value(t.doctype, t.name, 'field_mapping', mappingString);
+                frappe.model.set_value('Lightning Multi Import Target', t.name, 'field_mapping', mappingString);
             });
 
+            frm.refresh_field("multi_import_targets");
+            frm.dirty();
+            d.hide();
+
             // Save document to database
-            frm.save().then(() => {
-                d.hide();
-                frm.reload_doc();
+            try {
+                await frm.save();
                 frappe.show_alert({ message: __('All field mappings successfully saved in database.'), indicator: 'green' });
-            });
+            } catch (err) {
+                console.error("Error saving document after mapping fields:", err);
+                frappe.show_alert({ message: __('Failed to save field mapping.'), indicator: 'red' });
+            }
         }
     });
 
     // Dynamic field list switching on DocType change
     d.$wrapper.on('change', '.combined-doctype-select', function() {
-        const header = $(this).data('header');
+        const headerDoctype = $(this).data('header-doctype');
+        if (!headerDoctype) return;
+
+        const parts = headerDoctype.split("::");
+        const header = parts[0];
         const selectedDocType = $(this).val();
         const row = $(this).closest('tr');
+
+        // Update dataset of row and child select elements
+        const newHeaderDoctype = `${header}::${selectedDocType}`;
+        row.attr('data-header-doctype', newHeaderDoctype);
+        row.data('header-doctype', newHeaderDoctype);
+        $(this).attr('data-header-doctype', newHeaderDoctype);
+        $(this).data('header-doctype', newHeaderDoctype);
+
         const fieldSelect = row.find('.combined-field-select');
+        fieldSelect.attr('data-header-doctype', newHeaderDoctype);
+        fieldSelect.data('header-doctype', newHeaderDoctype);
 
         // Clear existing options
         fieldSelect.empty();
