@@ -727,12 +727,15 @@ function open_field_mapping_dialog(frm) {
                     console.log('Error parsing existing mapping:', e);
                 }
 
-                const auto_mapping_res = await frappe.xcall('lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_and_validate', { docname: frm.doc.name });
-                const backend_mapping = auto_mapping_res ? auto_mapping_res.mapping : {};
+                let backend_mapping = {};
+                if (!existingMapping || Object.keys(existingMapping).length === 0) {
+                    const auto_mapping_res = await frappe.xcall('lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.auto_map_and_validate', { docname: frm.doc.name });
+                    backend_mapping = auto_mapping_res ? auto_mapping_res.mapping : {};
+                }
 
                 const mapping = {};
                 csvHeaders.forEach(header => {
-                    if (existingMapping[header]) {
+                    if (existingMapping && existingMapping.hasOwnProperty(header)) {
                         mapping[header] = existingMapping[header];
                     } else {
                         mapping[header] = backend_mapping[header] || '';
@@ -884,11 +887,24 @@ async function open_combined_multi_mapping_dialog(frm) {
                 console.log('Error parsing existing mapping:', e);
             }
 
+            let backend_mapping = {};
+            if (!existingMapping || Object.keys(existingMapping).length === 0) {
+                try {
+                    const auto_mapping_res = await frappe.xcall('lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_auto_mapping_for_doctype', {
+                        docname: frm.doc.name,
+                        doctype: target.target_doctype
+                    });
+                    backend_mapping = auto_mapping_res ? auto_mapping_res.mapping : {};
+                } catch (err) {
+                    console.error(`Error getting auto mapping for ${target.target_doctype}:`, err);
+                }
+            }
+
             doctypes_metadata[target.target_doctype] = {
                 fields: fieldOptions,
                 required: requiredFields,
                 backend_mapping: backend_mapping,
-                existingMapping: existingMapping,
+                existingMapping: existingMapping || {},
                 targetName: target.name
             };
         } catch (targetErr) {
