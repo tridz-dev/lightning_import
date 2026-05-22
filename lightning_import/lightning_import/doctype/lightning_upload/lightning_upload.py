@@ -16,6 +16,28 @@ import time
 import random
 import io
 
+def build_readable_error_log(failed_rows, default_doctype=None):
+	"""Convert failed rows into a human-readable text log."""
+	lines = []
+	for fr in failed_rows[:100]:
+		row = fr.get('row') or {}
+		row_num = row.get('__csv_row_number__', '?')
+		error_msg = fr.get('error', '')
+		target_doctype = fr.get('target_doctype') or default_doctype or 'Unknown'
+		
+		if isinstance(error_msg, str):
+			error_msg_short = error_msg[:1024]
+		else:
+			error_msg_short = str(error_msg)[:1024]
+			
+		lines.append(f"Row {row_num} ({target_doctype}):\n{error_msg_short}")
+		
+	error_text = "\n\n".join(lines)
+	if len(failed_rows) > 100:
+		error_text += f"\n\n... and {len(failed_rows) - 100} more errors. Download the error CSV for full details."
+		
+	return error_text
+
 # ==========================================
 # FILE HELPERS
 # ==========================================
@@ -653,8 +675,9 @@ class LightningUpload(Document):
 		# Save reference to the first generated file in the primary error_file field
 		if file_urls:
 			frappe.db.set_value("Lightning Upload", self.name, "error_file", file_urls[0])
-			# Store all chunk URLs as JSON for reference
-			frappe.db.set_value("Lightning Upload", self.name, "error_log", json.dumps(file_urls))
+			error_log_text = build_readable_error_log(failed_rows, self.import_doctype)
+			self.error_log = error_log_text
+			frappe.db.set_value("Lightning Upload", self.name, "error_log", error_log_text)
 			return file_urls[0]
 		return None
 
@@ -825,8 +848,6 @@ def process_import_queue(docname):
 		error_file_time = 0
 		if all_failed_rows:
 			error_start = time.time()
-			doc.error_log = json.dumps(all_failed_rows, indent=2)
-			frappe.db.set_value("Lightning Upload", docname, "error_log", doc.error_log)
 			doc.generate_error_file(all_failed_rows)
 			error_file_time = round((time.time() - error_start) * 1000, 2)
 
@@ -1243,7 +1264,9 @@ def generate_multi_error_file(doc, all_failed_rows):
 	# Save reference to the first generated file in the primary error_file field
 	if file_urls:
 		frappe.db.set_value("Lightning Upload", doc.name, "error_file", file_urls[0])
-		frappe.db.set_value("Lightning Upload", doc.name, "error_log", json.dumps(file_urls))
+		error_log_text = build_readable_error_log(all_failed_rows)
+		doc.error_log = error_log_text
+		frappe.db.set_value("Lightning Upload", doc.name, "error_log", error_log_text)
 		return file_urls[0]
 	return None
 
@@ -1574,16 +1597,6 @@ def process_multi_import_queue(docname):
 		time_str = f"{int(time_taken)}s" if time_taken < 60 else f"{time_taken/60:.1f}m"
 
 		if all_failed_rows:
-			doc.error_log = json.dumps([
-				{
-					"target_doctype": f.get("target_doctype"),
-					"error": f.get("error"),
-					"row_num": f.get("row", {}).get("__csv_row_number__"),
-					"original_row": f.get("row", {}).get("__original_row__")
-				}
-				for f in all_failed_rows
-			], indent=2)
-			frappe.db.set_value("Lightning Upload", docname, "error_log", doc.error_log)
 			generate_multi_error_file(doc, all_failed_rows)
 
 		if all(status == "Completed" for status in target_statuses):
