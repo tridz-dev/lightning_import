@@ -145,9 +145,7 @@ function update_import_mode_ui(frm) {
     // 2. Populate CSV column dropdowns dynamically
     if (frm.doc.csv_file) {
         if (frm.doc.single_import) {
-            if (frm.doc.import_type === 'Insert and Update Records') {
-                frm.events.populate_update_on_field(frm);
-            }
+            frm.events.populate_update_on_field(frm);
             frm.events.populate_duplicate_check_field(frm);
         } else if (frm.doc.multiple_import) {
             frm.events.populate_multi_import_selects(frm);
@@ -235,6 +233,10 @@ frappe.ui.form.on('Lightning Upload', {
         update_import_mode_ui(frm);
     },
 
+    import_doctype: function (frm) {
+        update_import_mode_ui(frm);
+    },
+
     single_import: function (frm) {
         if (frm.doc.single_import) {
             frm.set_value('multiple_import', 0);
@@ -256,45 +258,45 @@ frappe.ui.form.on('Lightning Upload', {
     },
 
     populate_duplicate_check_field: function (frm) {
-        const is_saved_doc = !frm.is_new() && !frm.doc.__islocal;
-        if (is_saved_doc) {
-            frappe.call({
-                method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-                args: { file_url: frm.doc.csv_file },
-                callback: function (r) {
-                    if (r.message && r.message.status === 'success') {
-                        const headers = r.message.headers;
-                        const options = [''].concat(headers);
-                        frm.set_df_property('duplicate_check_field', 'options', options);
-                        frm.refresh_field('duplicate_check_field');
-                    }
-                }
-            });
-        } else {
+        if (!frm.doc.csv_file) {
             frm.set_df_property('duplicate_check_field', 'options', ['']);
             frm.refresh_field('duplicate_check_field');
+            return;
         }
+
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+            args: { file_url: frm.doc.csv_file },
+            callback: function (r) {
+                if (r.message && r.message.status === 'success') {
+                    const headers = r.message.headers;
+                    const options = [''].concat(headers);
+                    frm.set_df_property('duplicate_check_field', 'options', options);
+                    frm.refresh_field('duplicate_check_field');
+                }
+            }
+        });
     },
 
     populate_update_on_field: function (frm) {
-        const is_saved_doc = !frm.is_new() && !frm.doc.__islocal;
-        if (is_saved_doc) {
-            frappe.call({
-                method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-                args: { file_url: frm.doc.csv_file },
-                callback: function (r) {
-                    if (r.message && r.message.status === 'success') {
-                        const headers = r.message.headers;
-                        const options = [''].concat(headers);
-                        frm.set_df_property('update_on_field', 'options', options);
-                        frm.refresh_field('update_on_field');
-                    }
-                }
-            });
-        } else {
+        if (!frm.doc.csv_file) {
             frm.set_df_property('update_on_field', 'options', ['']);
             frm.refresh_field('update_on_field');
+            return;
         }
+
+        frappe.call({
+            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+            args: { file_url: frm.doc.csv_file },
+            callback: function (r) {
+                if (r.message && r.message.status === 'success') {
+                    const headers = r.message.headers;
+                    const options = [''].concat(headers);
+                    frm.set_df_property('update_on_field', 'options', options);
+                    frm.refresh_field('update_on_field');
+                }
+            }
+        });
     },
 
     populate_multi_import_selects: function (frm) {
