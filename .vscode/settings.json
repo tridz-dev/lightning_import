@@ -1,0 +1,12 @@
+{
+  "python.defaultInterpreterPath": "../../env/bin/python",
+  "python.analysis.extraPaths": [
+    "../../apps/frappe",
+    "../../apps/erpnext",
+    "../../apps/crm",
+    "../../apps/waflo",
+    "../../apps/talal",
+    "../../apps/frappe_whatsapp",
+    "../../apps/frappe_notifier"
+  ]
+}

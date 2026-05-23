@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
- "creation": "2026-05-20 05:00:00.000000",
+ "creation": "2026-05-20 05:00:00",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -9,7 +9,6 @@
   "execution_order",
   "target_doctype",
   "import_type",
-  "field_mapping",
   "update_on_field",
   "duplicate_check_field",
   "status",
@@ -49,6 +48,7 @@
   {
    "fieldname": "field_mapping",
    "fieldtype": "Code",
+   "hidden": 1,
    "label": "Field Mapping",
    "options": "JSON",
    "read_only": 1
@@ -64,13 +64,13 @@
    "label": "Check Duplicates in Column"
   },
   {
+   "default": "Draft",
    "fieldname": "status",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
    "options": "Draft\nQueued\nIn Progress\nCompleted\nFailed\nPartial Success",
-   "read_only": 1,
-   "default": "Draft"
+   "read_only": 1
   },
   {
    "fieldname": "total_records",
@@ -98,7 +98,8 @@
   }
  ],
  "istable": 1,
- "modified": "2026-05-20 05:00:00.000000",
+ "links": [],
+ "modified": "2026-05-22 18:13:11.967628",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Multi Import Target",

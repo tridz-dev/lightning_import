@@ -1,4 +1,5 @@
 // Copyright (c) 2025, Tridz Technologies Pvt Ltd and contributors
+console.log("lightning_upload.js loaded");
 // For license information, please see license.txt
 
 // Store progress state globally
@@ -27,7 +28,7 @@ async function ensure_doc_saved(frm) {
 
 function setup_buttons(frm) {
     if (!frm.page) return;
-    
+
     frm.page.clear_primary_action();
     frm.clear_custom_buttons();
 
@@ -109,10 +110,9 @@ function update_import_mode_ui(frm) {
         frm.set_df_property('import_doctype', 'hidden', 0);
         frm.set_df_property('import_type', 'reqd', 1);
         frm.set_df_property('import_type', 'hidden', 0);
-        frm.set_df_property('update_on_field', 'hidden', frm.doc.import_type !== 'Insert and Update Records' ? 1 : 0);
-        frm.set_df_property('duplicate_check_field', 'hidden', 0);
+        frm.set_df_property('update_on_field', 'hidden', 0);
         frm.set_df_property('field_mapping', 'hidden', 0);
-        
+
         frm.set_df_property('multi_import_targets', 'reqd', 0);
         frm.set_df_property('multi_import_targets', 'hidden', 1);
     } else if (frm.doc.multiple_import) {
@@ -123,10 +123,24 @@ function update_import_mode_ui(frm) {
         frm.set_df_property('update_on_field', 'hidden', 1);
         frm.set_df_property('duplicate_check_field', 'hidden', 1);
         frm.set_df_property('field_mapping', 'hidden', 1);
-        
+
         frm.set_df_property('multi_import_targets', 'reqd', 1);
         frm.set_df_property('multi_import_targets', 'hidden', 0);
     }
+
+    frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
+        if (frm.doc.single_import) {
+            frm.set_df_property('duplicate_check_field', 'hidden', enabled ? 0 : 1);
+        } else if (frm.doc.multiple_import) {
+            if (frm.fields_dict.multi_import_targets && frm.fields_dict.multi_import_targets.grid) {
+                frm.fields_dict.multi_import_targets.grid.update_docfield_property(
+                    'duplicate_check_field',
+                    'hidden',
+                    enabled ? 0 : 1
+                );
+            }
+        }
+    });
 
     // 2. Populate CSV column dropdowns dynamically
     if (frm.doc.csv_file) {
@@ -134,14 +148,7 @@ function update_import_mode_ui(frm) {
             if (frm.doc.import_type === 'Insert and Update Records') {
                 frm.events.populate_update_on_field(frm);
             }
-            frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
-                if (enabled) {
-                    frm.set_df_property('duplicate_check_field', 'hidden', 0);
-                    frm.events.populate_duplicate_check_field(frm);
-                } else {
-                    frm.set_df_property('duplicate_check_field', 'hidden', 1);
-                }
-            });
+            frm.events.populate_duplicate_check_field(frm);
         } else if (frm.doc.multiple_import) {
             frm.events.populate_multi_import_selects(frm);
         }
@@ -156,13 +163,54 @@ function update_import_mode_ui(frm) {
     }, 150);
 }
 
+function apply_multi_import_grid_properties(frm, options=[]) {
+    if (!frm.fields_dict.multi_import_targets || !frm.fields_dict.multi_import_targets.grid) return;
+    const grid = frm.fields_dict.multi_import_targets.grid;
+
+    grid.update_docfield_property(
+        'update_on_field',
+        'hidden',
+        0
+    );
+
+    grid.update_docfield_property(
+        'update_on_field',
+        'options',
+        [''].concat(options)
+    );
+
+    grid.update_docfield_property(
+        'duplicate_check_field',
+        'options',
+        [''].concat(options)
+    );
+
+    frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
+        grid.update_docfield_property(
+            'duplicate_check_field',
+            'hidden',
+            enabled ? 0 : 1
+        );
+        grid.refresh();
+    });
+}
+
+// Hide duplicate footer "Insert Below" button in expanded grid rows.
+// The TOP toolbar button uses .grid-insert-row-below — keep it intact.
+// The BOTTOM footer button uses .grid-append-row inside .grid-footer-toolbar.
+$(document).on('click', '.grid-row', function () {
+    console.log('[Lightning Import] Grid row clicked, checking footer append button...');
+    setTimeout(() => {
+        $('.grid-row-open .grid-footer-toolbar .grid-append-row').hide();
+    }, 100);
+});
+
 frappe.ui.form.on('Lightning Upload', {
     refresh: function (frm) {
         frappe.progress_state.current_form = frm;
 
         // Perform centralized UI updates
         update_import_mode_ui(frm);
-
         // Set up progress tracking if import is in progress
         if (frm.doc.status === 'Queued' || frm.doc.status === 'In Progress') {
             setup_progress_tracking(frm);
@@ -187,7 +235,7 @@ frappe.ui.form.on('Lightning Upload', {
         update_import_mode_ui(frm);
     },
 
-    single_import: function(frm) {
+    single_import: function (frm) {
         if (frm.doc.single_import) {
             frm.set_value('multiple_import', 0);
             update_import_mode_ui(frm);
@@ -197,7 +245,7 @@ frappe.ui.form.on('Lightning Upload', {
         }
     },
 
-    multiple_import: function(frm) {
+    multiple_import: function (frm) {
         if (frm.doc.multiple_import) {
             frm.set_value('single_import', 0);
             update_import_mode_ui(frm);
@@ -208,33 +256,45 @@ frappe.ui.form.on('Lightning Upload', {
     },
 
     populate_duplicate_check_field: function (frm) {
-        frappe.call({
-            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-            args: { file_url: frm.doc.csv_file },
-            callback: function (r) {
-                if (r.message && r.message.status === 'success') {
-                    const headers = r.message.headers;
-                    const options = [''].concat(headers);
-                    frm.set_df_property('duplicate_check_field', 'options', options);
-                    frm.refresh_field('duplicate_check_field');
+        const is_saved_doc = !frm.is_new() && !frm.doc.__islocal;
+        if (is_saved_doc) {
+            frappe.call({
+                method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+                args: { file_url: frm.doc.csv_file },
+                callback: function (r) {
+                    if (r.message && r.message.status === 'success') {
+                        const headers = r.message.headers;
+                        const options = [''].concat(headers);
+                        frm.set_df_property('duplicate_check_field', 'options', options);
+                        frm.refresh_field('duplicate_check_field');
+                    }
                 }
-            }
-        });
+            });
+        } else {
+            frm.set_df_property('duplicate_check_field', 'options', ['']);
+            frm.refresh_field('duplicate_check_field');
+        }
     },
 
     populate_update_on_field: function (frm) {
-        frappe.call({
-            method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
-            args: { file_url: frm.doc.csv_file },
-            callback: function (r) {
-                if (r.message && r.message.status === 'success') {
-                    const headers = r.message.headers;
-                    const options = [''].concat(headers);
-                    frm.set_df_property('update_on_field', 'options', options);
-                    frm.refresh_field('update_on_field');
+        const is_saved_doc = !frm.is_new() && !frm.doc.__islocal;
+        if (is_saved_doc) {
+            frappe.call({
+                method: 'lightning_import.lightning_import.doctype.lightning_upload.lightning_upload.get_csv_headers_for_upload',
+                args: { file_url: frm.doc.csv_file },
+                callback: function (r) {
+                    if (r.message && r.message.status === 'success') {
+                        const headers = r.message.headers;
+                        const options = [''].concat(headers);
+                        frm.set_df_property('update_on_field', 'options', options);
+                        frm.refresh_field('update_on_field');
+                    }
                 }
-            }
-        });
+            });
+        } else {
+            frm.set_df_property('update_on_field', 'options', ['']);
+            frm.refresh_field('update_on_field');
+        }
     },
 
     populate_multi_import_selects: function (frm) {
@@ -246,27 +306,9 @@ frappe.ui.form.on('Lightning Upload', {
             callback: function (r) {
                 if (r.message && r.message.status === 'success') {
                     const headers = r.message.headers;
-                    const options = [''].concat(headers);
-                    
-                    if (frm.fields_dict['multi_import_targets'] && frm.fields_dict['multi_import_targets'].grid) {
-                        const grid = frm.fields_dict['multi_import_targets'].grid;
-                        
-                        // Set on grid columns metadata
-                        grid.docfields.forEach(df => {
-                            if (df.fieldname === 'update_on_field' || df.fieldname === 'duplicate_check_field') {
-                                df.options = options;
-                            }
-                        });
-
-                        // Set on global form docfields metadata
-                        const update_df = frappe.meta.get_docfield("Lightning Multi Import Target", "update_on_field", frm.docname);
-                        if (update_df) update_df.options = options;
-
-                        const dup_df = frappe.meta.get_docfield("Lightning Multi Import Target", "duplicate_check_field", frm.docname);
-                        if (dup_df) dup_df.options = options;
-                        
-                        grid.refresh();
-                    }
+                    apply_multi_import_grid_properties(frm, headers);
+                } else {
+                    apply_multi_import_grid_properties(frm, []);
                 }
             }
         });
@@ -275,7 +317,7 @@ frappe.ui.form.on('Lightning Upload', {
 
 // Grid row trigger mapping
 frappe.ui.form.on('Lightning Multi Import Target', {
-    multi_import_targets_add: function(frm, cdt, cdn) {
+    multi_import_targets_add: function (frm, cdt, cdn) {
         if (frm.doc.csv_file) {
             frm.events.populate_multi_import_selects(frm);
         }
@@ -320,12 +362,12 @@ function update_progress(frm, data) {
     frm.progress_bar.find('.progress-bar')
         .css('width', `${data.progress}%`)
         .attr('aria-valuenow', data.progress);
-    
+
     let titleHtml = data.title;
     if (data.multiple_import && data.current_target_doctype) {
         titleHtml = `<b>Overall Progress: ${data.progress}%</b><br>` +
-                    `<span style="font-size:13px; color:#555;">Importing Target DocType: <b>${data.current_target_doctype}</b> (${data.current_target_index}/${data.total_targets})</span><br>` +
-                    `<span style="font-size:12px; color:#888;">Processed: ${data.target_successful_records} Succeeded, ${data.target_failed_records} Failed (Total: ${data.target_total_records})</span>`;
+            `<span style="font-size:13px; color:#555;">Importing Target DocType: <b>${data.current_target_doctype}</b> (${data.current_target_index}/${data.total_targets})</span><br>` +
+            `<span style="font-size:12px; color:#888;">Processed: ${data.target_successful_records} Succeeded, ${data.target_failed_records} Failed (Total: ${data.target_total_records})</span>`;
     }
     frm.progress_bar.find('.progress-status').html(titleHtml);
 
@@ -700,7 +742,7 @@ function open_field_mapping_dialog(frm) {
             }
 
             const csvHeaders = csvRes.message.headers;
-            
+
             frappe.model.with_doctype(frm.doc.import_doctype, async () => {
                 const meta = frappe.get_meta(frm.doc.import_doctype);
                 const requiredFields = meta.fields.filter(f => f.reqd).map(f => f.fieldname);
@@ -943,7 +985,7 @@ async function open_combined_multi_mapping_dialog(frm) {
 
             tableHtml += `<tr class="mapping-dialog-row" data-header-doctype="${frappe.utils.escape_html(header)}::${frappe.utils.escape_html(doctype)}">`;
             tableHtml += `<td><input type='text' class='form-control' value='${frappe.utils.escape_html(header)}' readonly tabindex='-1'></td>`;
-            
+
             // DocType Dropdown Selector
             tableHtml += `<td><select class='form-control combined-doctype-select' data-header-doctype="${frappe.utils.escape_html(header)}::${frappe.utils.escape_html(doctype)}" style="width:100%;">`;
             tableHtml += `<option value=''>Don't Import</option>`;
@@ -994,7 +1036,7 @@ async function open_combined_multi_mapping_dialog(frm) {
                 const header = parts[0];
                 const docType = $(this).find('.combined-doctype-select').val();
                 const field = $(this).find('.combined-field-select').val();
-                
+
                 if (docType && field) {
                     const meta = doctypes_metadata[docType];
                     if (meta && targetMappings[meta.targetName]) {
@@ -1047,11 +1089,14 @@ async function open_combined_multi_mapping_dialog(frm) {
 
             frm.refresh_field("multi_import_targets");
             frm.dirty();
-            d.hide();
+
+            console.log("Before save targetMappings:", targetMappings);
 
             // Save document to database
             try {
                 await frm.save();
+                d.hide();
+                console.log("After save, multi_import_targets field_mappings:", frm.doc.multi_import_targets.map(t => ({ name: t.name, field_mapping: t.field_mapping })));
                 frappe.show_alert({ message: __('All field mappings successfully saved in database.'), indicator: 'green' });
             } catch (err) {
                 console.error("Error saving document after mapping fields:", err);
@@ -1061,7 +1106,7 @@ async function open_combined_multi_mapping_dialog(frm) {
     });
 
     // Dynamic field list switching on DocType change
-    d.$wrapper.on('change', '.combined-doctype-select', function() {
+    d.$wrapper.on('change', '.combined-doctype-select', function () {
         const headerDoctype = $(this).data('header-doctype');
         if (!headerDoctype) return;
 

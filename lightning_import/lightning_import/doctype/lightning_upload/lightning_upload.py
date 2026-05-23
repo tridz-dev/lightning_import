@@ -1364,7 +1364,8 @@ def auto_map_multi_import(docname):
 				f"{header}::{target.target_doctype}": field
 				for header, field in mapping_res["mapping"].items()
 			}
-			target.field_mapping = json.dumps(combined_mapping)
+			if not target.field_mapping:
+				target.field_mapping = json.dumps(combined_mapping)
 
 		doc.flags.ignore_validate = True
 		doc.save(ignore_permissions=True)
