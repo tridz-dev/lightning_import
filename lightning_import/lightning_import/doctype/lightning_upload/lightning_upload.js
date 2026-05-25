@@ -174,13 +174,13 @@ function apply_multi_import_grid_properties(frm, options=[]) {
     grid.update_docfield_property(
         'update_on_field',
         'options',
-        [''].concat(options)
+        options?.length ? options.join('\n') : []
     );
 
     grid.update_docfield_property(
         'duplicate_check_field',
         'options',
-        [''].concat(options)
+        options?.length ? options.join('\n') : []
     );
 
     frappe.db.get_single_value('Lightning Upload Settings', 'enable_file_duplicate_check').then(enabled => {
@@ -259,7 +259,7 @@ frappe.ui.form.on('Lightning Upload', {
 
     populate_duplicate_check_field: function (frm) {
         if (!frm.doc.csv_file) {
-            frm.set_df_property('duplicate_check_field', 'options', ['']);
+            frm.set_df_property('duplicate_check_field', 'options', []);
             frm.refresh_field('duplicate_check_field');
             return;
         }
@@ -270,8 +270,11 @@ frappe.ui.form.on('Lightning Upload', {
             callback: function (r) {
                 if (r.message && r.message.status === 'success') {
                     const headers = r.message.headers;
-                    const options = [''].concat(headers);
-                    frm.set_df_property('duplicate_check_field', 'options', options);
+                    if (headers?.length) {
+                        frm.set_df_property('duplicate_check_field', 'options', headers.join('\n'));
+                    } else {
+                        frm.set_df_property('duplicate_check_field', 'options', []);
+                    }
                     frm.refresh_field('duplicate_check_field');
                 }
             }
@@ -280,7 +283,7 @@ frappe.ui.form.on('Lightning Upload', {
 
     populate_update_on_field: function (frm) {
         if (!frm.doc.csv_file) {
-            frm.set_df_property('update_on_field', 'options', ['']);
+            frm.set_df_property('update_on_field', 'options', []);
             frm.refresh_field('update_on_field');
             return;
         }
@@ -291,8 +294,11 @@ frappe.ui.form.on('Lightning Upload', {
             callback: function (r) {
                 if (r.message && r.message.status === 'success') {
                     const headers = r.message.headers;
-                    const options = [''].concat(headers);
-                    frm.set_df_property('update_on_field', 'options', options);
+                    if (headers?.length) {
+                        frm.set_df_property('update_on_field', 'options', headers.join('\n'));
+                    } else {
+                        frm.set_df_property('update_on_field', 'options', []);
+                    }
                     frm.refresh_field('update_on_field');
                 }
             }
@@ -319,6 +325,18 @@ frappe.ui.form.on('Lightning Upload', {
 
 // Grid row trigger mapping
 frappe.ui.form.on('Lightning Multi Import Target', {
+    form_render: function (frm, cdt, cdn) {
+        setTimeout(() => {
+            if (!frm.fields_dict.multi_import_targets || !frm.fields_dict.multi_import_targets.grid) return;
+            const grid_row = frm.fields_dict.multi_import_targets.grid.grid_rows_by_docname[cdn];
+            if (grid_row && grid_row.row_form) {
+                const buttons = grid_row.row_form.find('.grid-insert-row-below');
+                if (buttons.length > 1) {
+                    buttons.last().remove();
+                }
+            }
+        }, 50);
+    },
     multi_import_targets_add: function (frm, cdt, cdn) {
         if (frm.doc.csv_file) {
             frm.events.populate_multi_import_selects(frm);
