@@ -13,11 +13,13 @@
   {
    "fieldname": "field_name",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "Field Name"
   },
   {
    "fieldname": "alternate_name",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Alternate Name"
   }
  ],
@@ -25,7 +27,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-05-14 11:02:40.388976",
+ "modified": "2026-05-25 14:12:23.875906",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Fields",
