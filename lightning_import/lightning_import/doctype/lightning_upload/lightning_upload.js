@@ -854,6 +854,18 @@ function open_field_mapping_dialog(frm) {
 
                 d.show();
                 d.$wrapper.find('.modal-dialog').css('max-width', '750px');
+
+                // Immediate persist on change
+                d.$wrapper.on('change', '.field-mapping-select', function () {
+                    const values = {};
+                    d.$wrapper.find('.field-mapping-select').each(function () {
+                        const header = $(this).data('header');
+                        const value = $(this).val();
+                        values[header] = value;
+                    });
+                    frm.set_value('field_mapping', JSON.stringify(values));
+                    frm.dirty();
+                });
             });
         }
     });
@@ -1027,7 +1039,7 @@ async function open_combined_multi_mapping_dialog(frm) {
             // Gather inputs from table
             let hasHeaderDoctypeDuplicate = false;
             d.$wrapper.find('.mapping-dialog-row').each(function () {
-                const headerDoctype = $(this).data('header-doctype');
+                const headerDoctype = $(this).attr('data-header-doctype') || $(this).data('header-doctype');
                 if (!headerDoctype) return;
 
                 const parts = headerDoctype.split("::");
@@ -1035,16 +1047,16 @@ async function open_combined_multi_mapping_dialog(frm) {
                 const docType = $(this).find('.combined-doctype-select').val();
                 const field = $(this).find('.combined-field-select').val();
 
-                if (docType && field) {
+                if (docType) {
                     const meta = doctypes_metadata[docType];
                     if (meta && targetMappings[meta.targetName]) {
                         const uniqueKey = `${header}::${docType}`;
-                        if (targetMappings[meta.targetName][uniqueKey]) {
+                        if (targetMappings[meta.targetName][uniqueKey] && field) {
                             frappe.msgprint(__('Invalid Mapping: CSV Header "{0}" is mapped to multiple fields in DocType "{1}".', [header, docType]));
                             hasHeaderDoctypeDuplicate = true;
                             return false; // break jquery each loop
                         }
-                        targetMappings[meta.targetName][uniqueKey] = field;
+                        targetMappings[meta.targetName][uniqueKey] = field || "";
                     }
                 }
             });
@@ -1139,6 +1151,47 @@ async function open_combined_multi_mapping_dialog(frm) {
                 }));
             });
         }
+
+        persist_multi_mappings();
+    });
+
+    // Immediate persist on change function
+    const persist_multi_mappings = () => {
+        const targetMappings = {};
+        enabled_targets.forEach(t => {
+            targetMappings[t.name] = {};
+        });
+
+        d.$wrapper.find('.mapping-dialog-row').each(function () {
+            const headerDoctype = $(this).attr('data-header-doctype') || $(this).data('header-doctype');
+            if (!headerDoctype) return;
+
+            const parts = headerDoctype.split("::");
+            const header = parts[0];
+            const docType = $(this).find('.combined-doctype-select').val();
+            const field = $(this).find('.combined-field-select').val();
+
+            if (docType) {
+                const meta = doctypes_metadata[docType];
+                if (meta && targetMappings[meta.targetName]) {
+                    const uniqueKey = `${header}::${docType}`;
+                    targetMappings[meta.targetName][uniqueKey] = field || "";
+                }
+            }
+        });
+
+        enabled_targets.forEach(t => {
+            const mappingString = JSON.stringify(targetMappings[t.name]);
+            frappe.model.set_value('Lightning Multi Import Target', t.name, 'field_mapping', mappingString);
+        });
+
+        frm.refresh_field("multi_import_targets");
+        frm.dirty();
+    };
+
+    // Bind change listener for combined-field-select
+    d.$wrapper.on('change', '.combined-field-select', function () {
+        persist_multi_mappings();
     });
 
     d.show();

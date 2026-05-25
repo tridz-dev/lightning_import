@@ -13,7 +13,6 @@
   "import_type",
   "csv_file",
   "multi_import_targets",
-  "field_mapping",
   "total_data",
   "error_file",
   "total_records",
@@ -84,15 +83,6 @@
    "label": "Multi Import Targets",
    "options": "Lightning Multi Import Target",
    "read_only_depends_on": "eval:doc.status && doc.status !== \"Draft\""
-  },
-  {
-   "description": "Mapping between CSV columns and DocType fields (JSON)",
-   "fieldname": "field_mapping",
-   "fieldtype": "Code",
-   "hidden": 1,
-   "label": "Field Mapping",
-   "no_copy": 1,
-   "read_only": 1
   },
   {
    "fieldname": "total_data",
@@ -178,11 +168,11 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-20 05:00:00.000000",
+ "modified": "2026-05-25 22:04:19.981708",
  "modified_by": "Administrator",
  "module": "Lightning Import",
  "name": "Lightning Upload",
- "naming_rule": "Expression",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {

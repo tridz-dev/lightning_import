@@ -15,7 +15,8 @@
         "total_records",
         "successful_records",
         "failed_records",
-        "last_processed_row"
+        "last_processed_row",
+        "field_mapping"
     ],
     "fields": [
         {
@@ -86,6 +87,14 @@
             "fieldname": "last_processed_row",
             "fieldtype": "Int",
             "label": "Last Processed Row",
+            "read_only": 1
+        },
+        {
+            "fieldname": "field_mapping",
+            "fieldtype": "Code",
+            "hidden": 1,
+            "label": "Field Mapping",
+            "options": "JSON",
             "read_only": 1
         }
     ],
