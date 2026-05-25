@@ -337,43 +337,58 @@ def import_rows_for_doctype(import_config, raw_rows):
 		
 	success_count = 0
 	try:
-		if import_type == "Insert and Update Records":
+		if import_type in ["Insert and Update Records", "Update Existing Records"]:
 			mapping = json.loads(field_mapping) if isinstance(field_mapping, str) else field_mapping
-			update_on_csv_col = update_on_field
-			if not update_on_csv_col:
-				raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
+			duplicate_check_csv_col = import_config.get("duplicate_check_field")
 			
-			mapped_update_field = (
-				mapping.get(f"{update_on_csv_col}::{import_doctype}")
-				or mapping.get(update_on_csv_col)
-			)
-			if not mapped_update_field:
-				raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
-
-			keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
-			
-			existing_docs_map = {}
-			if keys_to_check:
-				existing = frappe.get_all(
-					import_doctype,
-					filters={mapped_update_field: ['in', keys_to_check]},
-					fields=['name', mapped_update_field]
+			if duplicate_check_csv_col:
+				mapped_update_field = (
+					mapping.get(f"{duplicate_check_csv_col}::{import_doctype}")
+					or mapping.get(duplicate_check_csv_col)
 				)
-				existing_docs_map = {doc[mapped_update_field]: doc.name for doc in existing}
-
-			to_insert = []
-			to_update = []
-			for record in records_to_process:
-				key_value = record.get(mapped_update_field)
-				if key_value in existing_docs_map:
-					record['name'] = existing_docs_map[key_value]
-					to_update.append(record)
-				else:
-					# Generate unique docname
-					timestamp = int(time.time() * 1000000)
-					random_suffix = random.randint(100000, 999999)
-					record['name'] = f"{import_doctype}-{timestamp}{random_suffix}"
-					to_insert.append(record)
+				if not mapped_update_field:
+					raise ValueError(f"The selected duplicate check column '{duplicate_check_csv_col}' is not mapped to any DocType field.")
+	
+				keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
+				
+				existing_docs_map = {}
+				if keys_to_check:
+					existing = frappe.get_all(
+						import_doctype,
+						filters={mapped_update_field: ['in', keys_to_check]},
+						fields=['name', mapped_update_field]
+					)
+					existing_docs_map = {doc[mapped_update_field]: doc.name for doc in existing}
+	
+				to_insert = []
+				to_update = []
+				for record in records_to_process:
+					key_value = record.get(mapped_update_field)
+					if key_value in existing_docs_map:
+						record['name'] = existing_docs_map[key_value]
+						to_update.append(record)
+					else:
+						if import_type == "Insert and Update Records":
+							timestamp = int(time.time() * 1000000)
+							random_suffix = random.randint(100000, 999999)
+							record['name'] = f"{import_doctype}-{timestamp}{random_suffix}"
+							to_insert.append(record)
+						else:
+							failed_rows.append({'row': record, 'error': f"Matching record not found for {mapped_update_field} = {key_value}"})
+			else:
+				to_insert = []
+				to_update = []
+				for record in records_to_process:
+					if record.get('name'):
+						to_update.append(record)
+					else:
+						if import_type == "Insert and Update Records":
+							timestamp = int(time.time() * 1000000)
+							random_suffix = random.randint(100000, 999999)
+							record['name'] = f"{import_doctype}-{timestamp}{random_suffix}"
+							to_insert.append(record)
+						else:
+							failed_rows.append({'row': record, 'error': "Name ID not provided for update."})
 
 			UPDATE_CHUNK_SIZE = 1000
 			if to_update:
@@ -381,7 +396,7 @@ def import_rows_for_doctype(import_config, raw_rows):
 					chunk = to_update[i:i + UPDATE_CHUNK_SIZE]
 					execute_bulk_update(import_doctype, chunk)
 			
-			if to_insert:
+			if to_insert and import_type == "Insert and Update Records":
 				execute_bulk_insert(import_doctype, to_insert)
 
 			success_count = len(to_insert) + len(to_update)
@@ -392,13 +407,6 @@ def import_rows_for_doctype(import_config, raw_rows):
 				random_suffix = random.randint(100000, 999999)
 				record['name'] = f"{import_doctype}-{timestamp}{random_suffix}"
 			execute_bulk_insert(import_doctype, records_to_process)
-			success_count = len(records_to_process)
-
-		elif import_type == "Update Existing Records":
-			UPDATE_CHUNK_SIZE = 1000
-			for i in range(0, len(records_to_process), UPDATE_CHUNK_SIZE):
-				chunk = records_to_process[i:i + UPDATE_CHUNK_SIZE]
-				execute_bulk_update(import_doctype, chunk)
 			success_count = len(records_to_process)
 			
 	except Exception as e:
@@ -432,8 +440,8 @@ class LightningUpload(Document):
 				frappe.throw(_("DocType is required for Single Import."))
 			if not self.import_type:
 				frappe.throw(_("Import Type is required for Single Import."))
-			if self.import_type == "Insert and Update Records" and not self.update_on_field:
-				frappe.throw(_("Validate On CSV Column is required for 'Insert and Update Records' import type."))
+			if self.import_type == "Insert and Update Records" and not self.duplicate_check_field:
+				frappe.throw(_("Duplicate Check Field is required for 'Insert and Update Records' import type."))
 
 		elif self.multiple_import:
 			enabled_targets = [t for t in self.multi_import_targets if t.enabled]
@@ -447,8 +455,8 @@ class LightningUpload(Document):
 					frappe.throw(_("Row #{0}: Target DocType is required.").format(idx))
 				if not target.import_type:
 					frappe.throw(_("Row #{0}: Import Type is required.").format(idx))
-				if target.import_type == "Insert and Update Records" and not target.update_on_field:
-					frappe.throw(_("Row #{0}: Validate On CSV Column is required for 'Insert and Update Records' import type.").format(idx))
+				if target.import_type == "Insert and Update Records" and not target.duplicate_check_field:
+					frappe.throw(_("Row #{0}: Duplicate Check Field is required for 'Insert and Update Records' import type.").format(idx))
 
 	def validate_mappings(self):
 		"""Explicit mapping validation before starting the import process"""
@@ -466,10 +474,10 @@ class LightningUpload(Document):
 			if self.import_type in ["Update Existing Records", "Insert and Update Records"]:
 				has_name = 'name' in mapped_fields
 				has_update_on = False
-				if self.update_on_field:
-					has_update_on = bool(mapping.get(self.update_on_field))
+				if self.duplicate_check_field:
+					has_update_on = bool(mapping.get(self.duplicate_check_field))
 				if not (has_name or has_update_on):
-					frappe.throw(_("For updating records, either the 'name' (ID) field or the configured 'update_on_field' ({0}) must be mapped.").format(self.update_on_field or ""))
+					frappe.throw(_("For updating records, either the 'name' (ID) field or the configured 'duplicate_check_field' ({0}) must be mapped.").format(self.duplicate_check_field or ""))
 
 		elif self.multiple_import:
 			enabled_targets = [t for t in self.multi_import_targets if t.enabled]
@@ -491,13 +499,13 @@ class LightningUpload(Document):
 				if target.import_type in ["Update Existing Records", "Insert and Update Records"]:
 					has_name = 'name' in mapped_fields
 					has_update_on = False
-					if target.update_on_field:
+					if target.duplicate_check_field:
 						has_update_on = bool(
-							mapping.get(f"{target.update_on_field}::{target.target_doctype}")
-							or mapping.get(target.update_on_field)
+							mapping.get(f"{target.duplicate_check_field}::{target.target_doctype}")
+							or mapping.get(target.duplicate_check_field)
 						)
 					if not (has_name or has_update_on):
-						frappe.throw(_("Row #{0}: For updating records in {1}, either the 'name' (ID) field or the configured 'update_on_field' ({2}) must be mapped.").format(idx, target.target_doctype, target.update_on_field or ""))
+						frappe.throw(_("Row #{0}: For updating records in {1}, either the 'name' (ID) field or the configured 'duplicate_check_field' ({2}) must be mapped.").format(idx, target.target_doctype, target.duplicate_check_field or ""))
 
 	def validate_csv_file(self):
 		"""Validate if the uploaded file is a valid CSV file"""
@@ -564,37 +572,51 @@ class LightningUpload(Document):
 			
 		success_count = 0
 		try:
-			if self.import_type == "Insert and Update Records":
+			if self.import_type in ["Insert and Update Records", "Update Existing Records"]:
 				mapping = json.loads(self.field_mapping)
-				update_on_csv_col = self.update_on_field
-				if not update_on_csv_col:
-					raise ValueError("Validate On CSV Column not specified for 'Insert and Update' mode.")
+				duplicate_check_csv_col = self.duplicate_check_field
 				
-				mapped_update_field = mapping.get(update_on_csv_col)
-				if not mapped_update_field:
-					raise ValueError(f"The selected update column '{update_on_csv_col}' is not mapped to any DocType field.")
-
-				keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
-				
-				existing_docs_map = {}
-				if keys_to_check:
-					existing = frappe.get_all(
-						self.import_doctype,
-						filters={mapped_update_field: ['in', keys_to_check]},
-						fields=['name', mapped_update_field]
-					)
-					existing_docs_map = {doc[mapped_update_field]: doc.name for doc in existing}
-
-				to_insert = []
-				to_update = []
-				for record in records_to_process:
-					key_value = record.get(mapped_update_field)
-					if key_value in existing_docs_map:
-						record['name'] = existing_docs_map[key_value]
-						to_update.append(record)
-					else:
-						record['name'] = self.generate_docname(record)
-						to_insert.append(record)
+				if duplicate_check_csv_col:
+					mapped_update_field = mapping.get(duplicate_check_csv_col)
+					if not mapped_update_field:
+						raise ValueError(f"The selected duplicate check column '{duplicate_check_csv_col}' is not mapped to any DocType field.")
+	
+					keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
+					
+					existing_docs_map = {}
+					if keys_to_check:
+						existing = frappe.get_all(
+							self.import_doctype,
+							filters={mapped_update_field: ['in', keys_to_check]},
+							fields=['name', mapped_update_field]
+						)
+						existing_docs_map = {doc[mapped_update_field]: doc.name for doc in existing}
+	
+					to_insert = []
+					to_update = []
+					for record in records_to_process:
+						key_value = record.get(mapped_update_field)
+						if key_value in existing_docs_map:
+							record['name'] = existing_docs_map[key_value]
+							to_update.append(record)
+						else:
+							if self.import_type == "Insert and Update Records":
+								record['name'] = self.generate_docname(record)
+								to_insert.append(record)
+							else:
+								failed_rows.append({'row': record, 'error': f"Matching record not found for {mapped_update_field} = {key_value}"})
+				else:
+					to_insert = []
+					to_update = []
+					for record in records_to_process:
+						if record.get('name'):
+							to_update.append(record)
+						else:
+							if self.import_type == "Insert and Update Records":
+								record['name'] = self.generate_docname(record)
+								to_insert.append(record)
+							else:
+								failed_rows.append({'row': record, 'error': "Name ID not provided for update."})
 
 				UPDATE_CHUNK_SIZE = 1000
 				if to_update:
@@ -602,7 +624,7 @@ class LightningUpload(Document):
 						chunk = to_update[i:i + UPDATE_CHUNK_SIZE]
 						execute_bulk_update(self.import_doctype, chunk)
 				
-				if to_insert:
+				if to_insert and self.import_type == "Insert and Update Records":
 					execute_bulk_insert(self.import_doctype, to_insert)
 
 				success_count = len(to_insert) + len(to_update)
@@ -611,13 +633,6 @@ class LightningUpload(Document):
 				for record in records_to_process:
 					record['name'] = self.generate_docname(record)
 				execute_bulk_insert(self.import_doctype, records_to_process)
-				success_count = len(records_to_process)
-
-			elif self.import_type == "Update Existing Records":
-				UPDATE_CHUNK_SIZE = 1000
-				for i in range(0, len(records_to_process), UPDATE_CHUNK_SIZE):
-					chunk = records_to_process[i:i + UPDATE_CHUNK_SIZE]
-					execute_bulk_update(self.import_doctype, chunk)
 				success_count = len(records_to_process)
 				
 		except Exception as e:
@@ -1532,7 +1547,8 @@ def process_multi_import_queue(docname):
 					"import_doctype": target_doctype,
 					"import_type": import_type,
 					"field_mapping": field_mapping,
-					"update_on_field": update_on_field
+					"update_on_field": update_on_field,
+					"duplicate_check_field": target.duplicate_check_field
 				}
 				
 				result = import_rows_for_doctype(import_config, batch_raw_rows)

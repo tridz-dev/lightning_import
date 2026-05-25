@@ -193,15 +193,7 @@ function apply_multi_import_grid_properties(frm, options=[]) {
     });
 }
 
-// Hide duplicate footer "Insert Below" button in expanded grid rows.
-// The TOP toolbar button uses .grid-insert-row-below — keep it intact.
-// The BOTTOM footer button uses .grid-append-row inside .grid-footer-toolbar.
-$(document).on('click', '.grid-row', function () {
-    console.log('[Lightning Import] Grid row clicked, checking footer append button...');
-    setTimeout(() => {
-        $('.grid-row-open .grid-footer-toolbar .grid-append-row').hide();
-    }, 100);
-});
+
 
 frappe.ui.form.on('Lightning Upload', {
     refresh: function (frm) {
@@ -325,18 +317,6 @@ frappe.ui.form.on('Lightning Upload', {
 
 // Grid row trigger mapping
 frappe.ui.form.on('Lightning Multi Import Target', {
-    form_render: function (frm, cdt, cdn) {
-        setTimeout(() => {
-            if (!frm.fields_dict.multi_import_targets || !frm.fields_dict.multi_import_targets.grid) return;
-            const grid_row = frm.fields_dict.multi_import_targets.grid.grid_rows_by_docname[cdn];
-            if (grid_row && grid_row.row_form) {
-                const buttons = grid_row.row_form.find('.grid-insert-row-below');
-                if (buttons.length > 1) {
-                    buttons.last().remove();
-                }
-            }
-        }, 50);
-    },
     multi_import_targets_add: function (frm, cdt, cdn) {
         if (frm.doc.csv_file) {
             frm.events.populate_multi_import_selects(frm);
@@ -998,10 +978,8 @@ async function open_combined_multi_mapping_dialog(frm) {
                 initialField = meta.backend_mapping[header];
             }
 
-            // Only generate mapping row if a matching alias exists or an existing mapping is defined
-            if (!initialField) {
-                return;
-            }
+            // Show all rows to allow user to manually map unmatched fields
+            // Removed the if (!initialField) return; check as per requirement.
 
             tableHtml += `<tr class="mapping-dialog-row" data-header-doctype="${frappe.utils.escape_html(header)}::${frappe.utils.escape_html(doctype)}">`;
             tableHtml += `<td><input type='text' class='form-control' value='${frappe.utils.escape_html(header)}' readonly tabindex='-1'></td>`;
