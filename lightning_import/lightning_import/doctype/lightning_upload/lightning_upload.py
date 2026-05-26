@@ -184,7 +184,7 @@ def map_rows_for_doctype(raw_rows, mapping):
 		mapped_rows.append(mapped_row)
 	return mapped_rows
 
-def prepare_records(import_doctype, rows):
+def prepare_records(import_doctype, rows, import_type=None):
 	"""Prepare, type-convert, and validate mapped rows for a DocType"""
 	meta = frappe.get_meta(import_doctype)
 	field_types = {f.fieldname: f.fieldtype for f in meta.fields}
@@ -230,7 +230,7 @@ def prepare_records(import_doctype, rows):
 			# Validate row data via hooks
 			if LightningUploadSettings.get_validate_from_hook():
 				for method in frappe.get_hooks('lightning_import_validate_row'):
-					frappe.call(method, data=converted_data, doctype=import_doctype, import_type=None)
+					frappe.call(method, data=converted_data, doctype=import_doctype, import_type=import_type)
 			
 			records_to_process.append(converted_data)
 
@@ -330,7 +330,7 @@ def import_rows_for_doctype(import_config, raw_rows):
 		return {"success_count": 0, "failed_rows": []}
 		
 	# 3. Prepare records
-	records_to_process, failed_rows = prepare_records(import_doctype, valid_mapped_rows)
+	records_to_process, failed_rows = prepare_records(import_doctype, valid_mapped_rows, import_type)
 	
 	if not records_to_process:
 		return {"success_count": 0, "failed_rows": failed_rows}
@@ -565,7 +565,7 @@ class LightningUpload(Document):
 
 	def insert_records(self, rows):
 		"""Insert or update records in bulk using SQL (for backward compatibility)"""
-		records_to_process, failed_rows = prepare_records(self.import_doctype, rows)
+		records_to_process, failed_rows = prepare_records(self.import_doctype, rows, self.import_type)
 		
 		if not records_to_process:
 			return {'success_count': 0, 'failed_rows': failed_rows}
