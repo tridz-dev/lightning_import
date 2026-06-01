@@ -57,7 +57,10 @@ def get_raw_sheet_rows(doc):
 	try:
 		with open(file_path, 'r', encoding='utf-8') as csvfile:
 			reader = csv.DictReader(csvfile)
-			return list(reader)
+			rows = list(reader)
+			for idx, row in enumerate(rows, start=1):
+				row["__csv_row_number__"] = idx
+			return rows
 	except Exception as e:
 		frappe.throw(_("Error reading CSV data: {}").format(str(e)))
 
@@ -179,7 +182,7 @@ def map_rows_for_doctype(raw_rows, mapping):
 				actual_csv_field = csv_field.split("::")[0] if "::" in csv_field else csv_field
 				mapped_row[doctype_field] = row.get(actual_csv_field, None)
 		# Inject meta-fields for precise row tracking
-		mapped_row["__csv_row_number__"] = idx
+		mapped_row["__csv_row_number__"] = row.get("__csv_row_number__") or idx
 		mapped_row["__original_row__"] = row
 		mapped_rows.append(mapped_row)
 	return mapped_rows
@@ -339,15 +342,15 @@ def import_rows_for_doctype(import_config, raw_rows):
 	try:
 		if import_type in ["Insert and Update Records", "Update Existing Records"]:
 			mapping = json.loads(field_mapping) if isinstance(field_mapping, str) else field_mapping
-			duplicate_check_csv_col = import_config.get("duplicate_check_field")
+			update_on_csv_col = import_config.get("update_on_field")
 			
-			if duplicate_check_csv_col:
+			if update_on_csv_col:
 				mapped_update_field = (
-					mapping.get(f"{duplicate_check_csv_col}::{import_doctype}")
-					or mapping.get(duplicate_check_csv_col)
+					mapping.get(f"{update_on_csv_col}::{import_doctype}")
+					or mapping.get(update_on_csv_col)
 				)
 				if not mapped_update_field:
-					raise ValueError(f"The selected duplicate check column '{duplicate_check_csv_col}' is not mapped to any DocType field.")
+					raise ValueError(f"The selected Validate On CSV Column '{update_on_csv_col}' is not mapped to any DocType field.")
 	
 				keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
 				
@@ -440,9 +443,9 @@ class LightningUpload(Document):
 				frappe.throw(_("DocType is required for Single Import."))
 			if not self.import_type:
 				frappe.throw(_("Import Type is required for Single Import."))
-			if self.import_type == "Insert and Update Records" and not self.duplicate_check_field:
-				frappe.throw(_("Duplicate Check Field is required for 'Insert and Update Records' import type."))
-
+			if self.import_type == "Insert and Update Records" and not self.update_on_field:
+				frappe.throw(_("Validate On CSV Column is required for 'Insert and Update Records' import type."))
+ 
 		elif self.multiple_import:
 			enabled_targets = [t for t in self.multi_import_targets if t.enabled]
 			if not enabled_targets:
@@ -455,8 +458,8 @@ class LightningUpload(Document):
 					frappe.throw(_("Row #{0}: Target DocType is required.").format(idx))
 				if not target.import_type:
 					frappe.throw(_("Row #{0}: Import Type is required.").format(idx))
-				if target.import_type == "Insert and Update Records" and not target.duplicate_check_field:
-					frappe.throw(_("Row #{0}: Duplicate Check Field is required for 'Insert and Update Records' import type.").format(idx))
+				if target.import_type == "Insert and Update Records" and not target.update_on_field:
+					frappe.throw(_("Row #{0}: Validate On CSV Column is required for 'Insert and Update Records' import type.").format(idx))
 
 	def validate_mappings(self):
 		"""Explicit mapping validation before starting the import process"""
@@ -474,10 +477,10 @@ class LightningUpload(Document):
 			if self.import_type in ["Update Existing Records", "Insert and Update Records"]:
 				has_name = 'name' in mapped_fields
 				has_update_on = False
-				if self.duplicate_check_field:
-					has_update_on = bool(mapping.get(self.duplicate_check_field))
+				if self.update_on_field:
+					has_update_on = bool(mapping.get(self.update_on_field))
 				if not (has_name or has_update_on):
-					frappe.throw(_("For updating records, either the 'name' (ID) field or the configured 'duplicate_check_field' ({0}) must be mapped.").format(self.duplicate_check_field or ""))
+					frappe.throw(_("For updating records, either the 'name' (ID) field or the configured 'Validate On CSV Column' ({0}) must be mapped.").format(self.update_on_field or ""))
 
 		elif self.multiple_import:
 			enabled_targets = [t for t in self.multi_import_targets if t.enabled]
@@ -499,13 +502,13 @@ class LightningUpload(Document):
 				if target.import_type in ["Update Existing Records", "Insert and Update Records"]:
 					has_name = 'name' in mapped_fields
 					has_update_on = False
-					if target.duplicate_check_field:
+					if target.update_on_field:
 						has_update_on = bool(
-							mapping.get(f"{target.duplicate_check_field}::{target.target_doctype}")
-							or mapping.get(target.duplicate_check_field)
+							mapping.get(f"{target.update_on_field}::{target.target_doctype}")
+							or mapping.get(target.update_on_field)
 						)
 					if not (has_name or has_update_on):
-						frappe.throw(_("Row #{0}: For updating records in {1}, either the 'name' (ID) field or the configured 'duplicate_check_field' ({2}) must be mapped.").format(idx, target.target_doctype, target.duplicate_check_field or ""))
+						frappe.throw(_("Row #{0}: For updating records in {1}, either the 'name' (ID) field or the configured 'Validate On CSV Column' ({2}) must be mapped.").format(idx, target.target_doctype, target.update_on_field or ""))
 
 	def validate_csv_file(self):
 		"""Validate if the uploaded file is a valid CSV file"""
@@ -574,12 +577,12 @@ class LightningUpload(Document):
 		try:
 			if self.import_type in ["Insert and Update Records", "Update Existing Records"]:
 				mapping = json.loads(self.field_mapping)
-				duplicate_check_csv_col = self.duplicate_check_field
+				update_on_csv_col = self.update_on_field
 				
-				if duplicate_check_csv_col:
-					mapped_update_field = mapping.get(duplicate_check_csv_col)
+				if update_on_csv_col:
+					mapped_update_field = mapping.get(update_on_csv_col)
 					if not mapped_update_field:
-						raise ValueError(f"The selected duplicate check column '{duplicate_check_csv_col}' is not mapped to any DocType field.")
+						raise ValueError(f"The selected Validate On CSV Column '{update_on_csv_col}' is not mapped to any DocType field.")
 	
 					keys_to_check = list(set([rec.get(mapped_update_field) for rec in records_to_process if rec.get(mapped_update_field)]))
 					
@@ -1044,6 +1047,16 @@ def get_import_progress(progress_key):
 		return {"status": "Error", "progress": 0, "title": str(e)}
 
 @frappe.whitelist()
+def get_multi_import_progress(progress_key):
+	"""Get the current progress of a multiple import"""
+	try:
+		progress = frappe.cache().get_value(progress_key)
+		return progress or {"status": "Not Found", "progress": 0, "title": "Multiple Import not found"}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Multiple Import Progress Error")
+		return {"status": "Error", "progress": 0, "title": str(e)}
+
+@frappe.whitelist()
 def export_error_rows(docname):
 	"""API endpoint to export error rows"""
 	try:
@@ -1098,6 +1111,22 @@ def save_field_mapping(docname, mapping):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Lightning Import Save Field Mapping Error")
 		raise
+
+@frappe.whitelist()
+def save_multi_field_mapping(docname, target_row_name, mapping):
+	"""
+	API endpoint to save the field mapping JSON to a specific target DocType row in multi_import_targets.
+	"""
+	try:
+		doc = frappe.get_doc("Lightning Upload", docname)
+		for target in doc.multi_import_targets:
+			if target.name == target_row_name:
+				frappe.db.set_value("Lightning Multi Import Target", target_row_name, "field_mapping", mapping)
+				return {"status": "success"}
+		return {"status": "error", "message": f"Target row {target_row_name} not found"}
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Lightning Import Save Multi Field Mapping Error")
+		return {"status": "error", "message": str(e)}
 
 @frappe.whitelist()
 def check_file_duplicates(docname, mapping=None):
@@ -1616,7 +1645,9 @@ def process_multi_import_queue(docname):
 		if all_failed_rows:
 			generate_multi_error_file(doc, all_failed_rows)
 
-		if all(status == "Completed" for status in target_statuses):
+		if overall_successful_records == 0 and overall_failed_records > 0:
+			final_status = "Failed"
+		elif all(status == "Completed" for status in target_statuses):
 			final_status = "Completed"
 		elif all(status == "Failed" for status in target_statuses):
 			final_status = "Failed"
