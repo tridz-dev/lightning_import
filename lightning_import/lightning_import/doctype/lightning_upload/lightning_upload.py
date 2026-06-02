@@ -461,6 +461,20 @@ class LightningUpload(Document):
 				if target.import_type == "Insert and Update Records" and not target.update_on_field:
 					frappe.throw(_("Row #{0}: Validate On CSV Column is required for 'Insert and Update Records' import type.").format(idx))
 
+			# Aggregate doctypes and import types to display cleanly in standard list view columns
+			doctypes = sorted(list(set(t.target_doctype for t in enabled_targets if t.target_doctype)))
+			import_types = sorted(list(set(t.import_type for t in enabled_targets if t.import_type)))
+			
+			joined_doctypes = ", ".join(doctypes)
+			if len(joined_doctypes) > 140:
+				joined_doctypes = joined_doctypes[:137] + "..."
+			self.import_doctype = joined_doctypes
+			
+			joined_import_types = ", ".join(import_types)
+			if len(joined_import_types) > 140:
+				joined_import_types = joined_import_types[:137] + "..."
+			self.import_type = joined_import_types
+
 	def validate_mappings(self):
 		"""Explicit mapping validation before starting the import process"""
 		if self.single_import:
